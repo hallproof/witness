@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hallproof/witness/main/spec/schema/config_snapshot.schema.json",
+  "title": "ConfigSnapshot",
+  "description": "A system's settings at a point in time. Body of kind config_snapshot.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "A short name for the evidence." },
+    "description": { "type": "string" },
+    "tests": { "type": "array", "items": { "type": "string" }, "description": "Keys of the tests this evidence supports, such as mfa-enforced." },
+    "settings": { "type": "object", "additionalProperties": true, "description": "Any JSON object. Numbers keep the exact text the sender wrote." },
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "sha256 of the canonical JSON of settings. See protocol.md." }
+  },
+  "required": ["hash", "settings", "title"],
+  "additionalProperties": true
+}

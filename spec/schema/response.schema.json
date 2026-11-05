@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hallproof/witness/main/spec/schema/response.schema.json",
+  "title": "Response",
+  "description": "The answer to a batch read with status 200: one result per message, in the same order.",
+  "type": "object",
+  "properties": {
+    "version": { "const": 1 },
+    "results": { "type": "array", "items": { "$ref": "#/$defs/result" } }
+  },
+  "required": ["results", "version"],
+  "additionalProperties": true,
+  "$defs": {
+    "result": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The message's ID." },
+        "status": { "enum": ["accepted", "duplicate", "rejected", "unsupported"] },
+        "evidence_id": { "type": "string", "description": "The stored evidence, for accepted and duplicate." },
+        "error": { "type": "string", "description": "Why, for rejected and unsupported." }
+      },
+      "required": ["id", "status"],
+      "additionalProperties": true
+    }
+  }
+}

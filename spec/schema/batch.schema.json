@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hallproof/witness/main/spec/schema/batch.schema.json",
+  "title": "Batch",
+  "description": "What a sender POSTs to /api/v1/ingest. At most 100 messages and 8 MiB encoded.",
+  "type": "object",
+  "properties": {
+    "version": { "const": 1, "description": "The batch format version. It changes only for a breaking change." },
+    "messages": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/message" } }
+  },
+  "required": ["messages", "version"],
+  "additionalProperties": true,
+  "$defs": {
+    "message": {
+      "type": "object",
+      "description": "One piece of evidence, or a heartbeat. The body's schema depends on kind.",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "description": "1 to 200 bytes of UTF-8 without NUL. Unique for its system for ever." },
+        "kind": { "type": "string", "description": "config_snapshot, population, event_proof or heartbeat. A receiver answers unsupported for a kind it doesn't know." },
+        "collected_at": { "type": "string", "format": "date-time", "description": "When the evidence was collected. At most five minutes ahead of the receiver's clock." },
+        "body": { "description": "The kind's body: config_snapshot.schema.json, population.schema.json, event_proof.schema.json or heartbeat.schema.json." }
+      },
+      "required": ["body", "collected_at", "id", "kind"],
+      "additionalProperties": true
+    }
+  }
+}

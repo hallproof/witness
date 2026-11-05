@@ -1,0 +1,108 @@
+[
+  {
+    "name": "snapshot: keys sorted bytewise at every level",
+    "kind": "snapshot",
+    "input": {
+      "b": 1,
+      "a": {
+        "d": true,
+        "c": null
+      },
+      "B": 2
+    },
+    "canonical": "{\"B\":2,\"a\":{\"c\":null,\"d\":true},\"b\":1}",
+    "hash": "sha256:dd99dbd016b15455a697c99c216f6534a0a34b810ad47d7321435cba383de632"
+  },
+  {
+    "name": "snapshot: numbers keep the text the sender wrote",
+    "kind": "snapshot",
+    "input": {
+      "limit": 1.10,
+      "big": 1e3,
+      "neg": -0.5,
+      "zero": 0
+    },
+    "canonical": "{\"big\":1e3,\"limit\":1.10,\"neg\":-0.5,\"zero\":0}",
+    "hash": "sha256:e8ef2b9f19acde8eb53708f2ea249f11ac5a86edca1dfd2e9ee8116f2df3f040"
+  },
+  {
+    "name": "snapshot: no HTML escaping, UTF-8 kept",
+    "kind": "snapshot",
+    "input": {
+      "name": "Zoë <admin> & co",
+      "mark": "✓"
+    },
+    "canonical": "{\"mark\":\"✓\",\"name\":\"Zoë <admin> & co\"}",
+    "hash": "sha256:f4a7881177b46c8044225672246776db2051c9da7eef1b5dba84bc2f8aef24bd"
+  },
+  {
+    "name": "snapshot: arrays keep their order",
+    "kind": "snapshot",
+    "input": {
+      "roles": [
+        "user",
+        "admin"
+      ],
+      "mfa": {
+        "required": true,
+        "methods": [
+          "webauthn",
+          "totp"
+        ]
+      }
+    },
+    "canonical": "{\"mfa\":{\"methods\":[\"webauthn\",\"totp\"],\"required\":true},\"roles\":[\"user\",\"admin\"]}",
+    "hash": "sha256:26fc9a4f47129cd2e2e2361b495fdfdbcaa6e989c3143c323e86e55535fe82a4"
+  },
+  {
+    "name": "snapshot: empty settings",
+    "kind": "snapshot",
+    "input": {},
+    "canonical": "{}",
+    "hash": "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+    "name": "population: items in one order",
+    "kind": "population",
+    "input": [
+      {
+        "id": "u1",
+        "role": "admin"
+      },
+      {
+        "id": "u2",
+        "role": "user"
+      }
+    ],
+    "canonical": "{\"id\":\"u1\",\"role\":\"admin\"}\n{\"id\":\"u2\",\"role\":\"user\"}",
+    "hash": "sha256:6f28d071d5f4a4a82d40af3b9cabebb8a91a6a567f6c51fb429aad7f14d517b2"
+  },
+  {
+    "name": "population: the same items reversed give the same hash",
+    "kind": "population",
+    "input": [
+      {
+        "id": "u2",
+        "role": "user"
+      },
+      {
+        "id": "u1",
+        "role": "admin"
+      }
+    ],
+    "canonical": "{\"id\":\"u1\",\"role\":\"admin\"}\n{\"id\":\"u2\",\"role\":\"user\"}",
+    "hash": "sha256:6f28d071d5f4a4a82d40af3b9cabebb8a91a6a567f6c51fb429aad7f14d517b2"
+  },
+  {
+    "name": "population: exact numbers inside items",
+    "kind": "population",
+    "input": [
+      {
+        "id": "u1",
+        "n": 2.50
+      }
+    ],
+    "canonical": "{\"id\":\"u1\",\"n\":2.50}",
+    "hash": "sha256:f72af44454847d91f3d23c938e1246fd0d8dfc9c6f0761bc7df2ed4c74818748"
+  }
+]

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hallproof/witness/main/spec/schema/population.schema.json",
+  "title": "Population",
+  "description": "A list of items, such as every staff user. Body of kind population.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "A short name for the evidence." },
+    "description": { "type": "string" },
+    "tests": { "type": "array", "items": { "type": "string" }, "description": "Keys of the tests this evidence supports, such as mfa-enforced." },
+    "source": { "type": "string", "description": "What the items are, such as staff-users." },
+    "items": {
+      "type": "array",
+      "maxItems": 50000,
+      "items": {
+        "type": "object",
+        "properties": { "id": { "type": "string", "minLength": 1, "description": "Unique within the population." } },
+        "required": ["id"],
+        "additionalProperties": true
+      }
+    },
+    "hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "The order-independent population hash. See protocol.md." }
+  },
+  "required": ["hash", "items", "source", "title"],
+  "additionalProperties": true
+}

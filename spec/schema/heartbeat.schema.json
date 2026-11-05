@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hallproof/witness/main/spec/schema/heartbeat.schema.json",
+  "title": "Heartbeat",
+  "description": "Says a collector is alive. Body of kind heartbeat. Not evidence.",
+  "type": "object",
+  "properties": {
+    "collector": { "type": "string", "description": "The collector's key." },
+    "evidence": { "type": "string", "description": "The kind of evidence the collector pushes." },
+    "hash": { "type": "string", "description": "The content hash from the collector's last good run." },
+    "healthy": { "type": "boolean", "description": "False when the collector's last run failed." },
+    "last_success": { "type": "string", "format": "date-time", "description": "When the collector's last good run finished." },
+    "every_seconds": { "type": "integer", "minimum": 1, "description": "The heartbeat interval, so a receiver can tell when one is late." },
+    "replica": { "type": "string", "description": "Which copy of the app sent it." },
+    "sdk": { "type": "string", "description": "The sender and its version, such as witness-go/0.1.0." }
+  },
+  "required": ["collector", "every_seconds", "evidence", "healthy", "replica", "sdk"],
+  "additionalProperties": true
+}

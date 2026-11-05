@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/hallproof/witness/main/spec/schema/event_proof.schema.json",
+  "title": "EventProof",
+  "description": "A signed slice of an audit chain that backs up the cited events. Body of kind event_proof. The names mirror Chronicle's audit.Event and checkpoint.Checkpoint.",
+  "type": "object",
+  "properties": {
+    "title": { "type": "string", "description": "A short name for the evidence." },
+    "description": { "type": "string" },
+    "tests": { "type": "array", "items": { "type": "string" }, "description": "Keys of the tests this evidence supports, such as mfa-enforced." },
+    "cited": { "type": "array", "items": { "type": "integer", "minimum": 0 }, "description": "Sequences of the events in segment this proof backs up." },
+    "segment": { "type": "array", "maxItems": 10000, "items": { "$ref": "#/$defs/chain_event" }, "description": "A contiguous run of chain events, ending at the checkpoint." },
+    "checkpoint": { "$ref": "#/$defs/checkpoint" }
+  },
+  "required": ["checkpoint", "cited", "segment", "title"],
+  "additionalProperties": true,
+  "$defs": {
+    "chain_event": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }, "timestamp": { "type": "string", "format": "date-time" },
+        "sequence": { "type": "integer", "minimum": 0 }, "hash": { "type": "string" }, "prev_hash": { "type": "string" },
+        "stream_id": { "type": "string" }, "app_id": { "type": "string" }, "tenant_id": { "type": "string" },
+        "user_id": { "type": "string" }, "ip": { "type": "string" }, "user_agent": { "type": "string" },
+        "request_id": { "type": "string" }, "session_id": { "type": "string" },
+        "action": { "type": "string" }, "resource": { "type": "string" }, "category": { "type": "string" },
+        "resource_id": { "type": "string" }, "metadata": { "type": "object", "additionalProperties": true },
+        "outcome": { "type": "string" }, "severity": { "type": "string" }, "reason": { "type": "string" },
+        "subject_id": { "type": "string" }, "exact_metadata": { "type": "boolean" },
+        "hash_scheme": { "type": "string" }, "hash_key_id": { "type": "string" }
+      },
+      "required": ["action", "app_id", "category", "hash", "id", "outcome", "prev_hash", "resource", "sequence", "severity", "stream_id", "timestamp"],
+      "additionalProperties": true
+    },
+    "checkpoint": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" }, "stream_id": { "type": "string" }, "app_id": { "type": "string" },
+        "tenant_id": { "type": "string" }, "from_seq": { "type": "integer", "minimum": 0 }, "to_seq": { "type": "integer", "minimum": 0 },
+        "from_hash": { "type": "string" }, "to_hash": { "type": "string" }, "event_count": { "type": "integer", "minimum": 0 },
+        "prev_checkpoint": { "type": "string" }, "algorithm": { "type": "string" }, "sign_key_id": { "type": "string" },
+        "signature": { "type": "string", "contentEncoding": "base64" }, "signed_payload": { "type": "string" },
+        "created_at": { "type": "string", "format": "date-time" }
+      },
+      "required": ["algorithm", "app_id", "created_at", "event_count", "from_hash", "from_seq", "id", "sign_key_id", "signature", "signed_payload", "stream_id", "to_hash", "to_seq"],
+      "additionalProperties": true
+    }
+  }
+}
