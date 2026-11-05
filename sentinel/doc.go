@@ -79,7 +79,11 @@
 // AllTenants (config all_tenants, or the witness scope's AllTenants) counts
 // runs against every tenant and sends each run's target_tenant_id with it.
 // You'll rarely need it for SOC 2. It may matter under the EU AI Act if you
-// have to show testing per deployment.
+// have to show testing per deployment. The latest scores and red-team
+// descriptions then say they cover every tenant. When it's this adapter's
+// own all_tenants, attach tells the host through Host.Widened, so Hallproof
+// shows the widening. The witness scope's AllTenants is the host's to
+// report.
 //
 // A scope that holds more than push.MaxItems suites fails the run with
 // ErrTooMany, and the heartbeat reports the collector unhealthy, because a

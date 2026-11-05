@@ -152,6 +152,11 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 	if a.eng == nil {
 		return nil, nil, nil, errors.New("witness/sentinel: no engine")
 	}
+	// Which runs count: by default only runs against your own agents.
+	runs := " Only runs with no target tenant or against a staff tenant count."
+	if a.o.AllTenants {
+		runs = " Runs against every tenant count, customers included, because all_tenants is on, and each goes with its target tenant ID."
+	}
 	pops := []collect.Population{
 		{
 			Key:         KeySuites,
@@ -164,7 +169,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 		{
 			Key:         KeyLatestScores,
 			Title:       "Latest AI evaluation scores",
-			Description: "Each suite's most recent completed run, its scores, and how they compare with the suite's baseline.",
+			Description: "Each suite's most recent completed run, its scores, and how they compare with the suite's baseline." + runs,
 			Source:      "sentinel-latest-runs",
 			Every:       time.Hour,
 			Collect:     a.collectLatestScores,
@@ -172,7 +177,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 		{
 			Key:         KeyRedTeam,
 			Title:       "AI red-team results",
-			Description: "For each suite with red-team cases, the latest run's attack count and how many attacks got through, by attack type.",
+			Description: "For each suite with red-team cases, the latest run's attack count and how many attacks got through, by attack type." + runs,
 			Source:      "sentinel-redteam",
 			Every:       6 * time.Hour,
 			Collect:     a.collectRedTeam,
@@ -232,6 +237,11 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	}
 	if h.Scope.TenantID != "" {
 		o.StaffTenants = append(o.StaffTenants, h.Scope.TenantID)
+	}
+	// The host reports its own scope. Only this adapter's config is ours to
+	// report.
+	if o.AllTenants {
+		h.Widened("all_tenants")
 	}
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	return true, newAdapter(eng, o).Register(h.Witness)

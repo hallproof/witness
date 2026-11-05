@@ -269,6 +269,54 @@ func TestAttachRegistersFromConfig(t *testing.T) {
 	}
 }
 
+func TestAttachTellsTheHostItWidened(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config map[string]any
+		scope  bool // the witness scope's AllTenants
+		want   []string
+	}{
+		{"own all_tenants", map[string]any{"all_tenants": true}, false, []string{"all_tenants"}},
+		// The host reports its own scope; the adapter only reports its own
+		// config.
+		{"scope only", nil, true, nil},
+		{"staff tenants", map[string]any{"staff_tenants": []any{customer}}, false, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			c := vessel.New()
+			if err := vessel.ProvideValue(c, f.eng); err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: newWitness(t), Container: c, Scope: adapter.Scope{AllTenants: tc.scope}, Config: tc.config,
+				Widen: func(r string) { got = append(got, r) },
+			})
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v; want true, nil", found, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("Widen calls = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWidenedDescriptionsSayWhoTheyCover(t *testing.T) {
+	f := newFixture(t)
+	wide := collectorsOf(t, New(f.eng, WithAllTenants()))
+	staff := collectorsOf(t, New(f.eng))
+	for _, k := range []string{KeyLatestScores, KeyRedTeam} {
+		if d := wide.pops[k].Description; !strings.Contains(d, "every tenant") || !strings.Contains(d, "customers") {
+			t.Errorf("%s widened Description = %q, want every tenant, customers included", k, d)
+		}
+		if d := staff.pops[k].Description; strings.Contains(d, "every tenant") {
+			t.Errorf("%s staff Description = %q, want no every tenant", k, d)
+		}
+	}
+}
+
 func TestAttachBadConfig(t *testing.T) {
 	f := newFixture(t)
 	c := vessel.New()
