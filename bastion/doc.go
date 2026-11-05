@@ -62,8 +62,9 @@
 // Bastion has no tenants or users. Its routes and settings are your own
 // system configuration, so everything on the gateway goes out. What makes a
 // gateway a customer's is who it fronts. In a Forge app the adapter reads
-// only the *bastion.Gateway in the app's container, the one your app
-// registers for itself, and never a gateway you build by hand for a
+// only the gateway of the app's bastion extension (or, without one, the
+// *bastion.Gateway in the app's container), the one your app registers for
+// itself, and never a gateway you build by hand for a
 // customer's workload. The witness scope's AllTenants changes nothing here.
 // If you do want a customer-fronting gateway covered, register it yourself
 // with New, and Hallproof should label that system as widened.
@@ -87,14 +88,25 @@
 //
 // # Using it
 //
-// With Forge, import the package for its side effect, and the witness
-// extension finds *bastion.Gateway in the container:
+// With Forge, import the package for its side effect:
 //
 //	import _ "github.com/hallproof/witness/bastion"
 //
-// Bastion's Register provides the gateway by type, and only when the
-// gateway is enabled, so a disabled gateway is skipped. gateway.New and
-// extension.New both do this for you.
+// The adapter reads the gateway through the bastion extension (named
+// "bastion"), whichever of Bastion's extensions your app runs:
+// extension.New through its Gateway getter, and gateway.New or bastion.New,
+// which are the gateway themselves. A disabled gateway is skipped, and so is
+// an extension that has no gateway, with a log line. The adapter doesn't
+// ask the container when the extension runs. Bastion provides its finished
+// gateway there, which is safe to read, but other libraries register their
+// engines with constructors, and the container starts whatever a
+// constructor builds the first time anyone asks for it, so every adapter
+// reads the extension first.
+//
+// Only when your app doesn't run a bastion extension does the adapter look
+// for *bastion.Gateway in the container. If you build a gateway yourself,
+// provide the finished value there (vessel.ProvideValue or
+// forge.ProvideValue), not a constructor.
 //
 // Without Forge, build the adapter on your gateway and register it before
 // you start witness:

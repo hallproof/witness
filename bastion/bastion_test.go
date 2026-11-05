@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -655,5 +657,110 @@ func assertJSON(t *testing.T, got, want any) {
 	wj, _ := json.Marshal(wv)
 	if string(gj) != string(wj) {
 		t.Fatalf("got  %s\nwant %s", gj, wj)
+	}
+}
+
+// bastionExt stands in for bastion/extension's Extension, read through its
+// Gateway getter.
+type bastionExt struct{ gw *bst.Gateway }
+
+func (x bastionExt) Gateway() *bst.Gateway { return x.gw }
+
+// embeddingExt stands in for bastion/gateway's Extension, which embeds the
+// gateway and has no getter.
+type embeddingExt struct {
+	*bst.Gateway
+}
+
+func extensions(byName map[string]any) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		x, ok := byName[name]
+		return x, ok
+	}
+}
+
+// countingContainer holds gw behind a constructor and counts how often the
+// container calls it.
+func countingContainer(t *testing.T, gw *bst.Gateway) (vessel.Vessel, *atomic.Int32) {
+	t.Helper()
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*bst.Gateway, error) {
+		built.Add(1)
+		return gw, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, &built
+}
+
+// Attach reads the gateway through the bastion extension, whichever of
+// Bastion's three extensions the app runs, and never asks the container.
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	gw, rm := newGateway(t)
+	addRoute(t, rm, &bst.Route{ID: "r1", Path: "/a", Enabled: true, Targets: []*bst.Target{{ID: "t", URL: "https://a.internal"}}})
+	other, _ := newGateway(t)
+	for name, x := range map[string]any{
+		"extension.New": bastionExt{gw: gw},
+		"gateway.New":   &embeddingExt{Gateway: gw},
+		"bastion.New":   gw,
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, built := countingContainer(t, other)
+			h := adapter.Host{Witness: newWitness(t), Container: c, Extension: extensions(map[string]any{"bastion": x})}
+			found, err := attach(context.Background(), h)
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v; want true, nil", found, err)
+			}
+			for _, k := range []string{KeyRoutes, KeyGateway} {
+				if !taken(t, h.Witness, k) {
+					t.Errorf("%s was not registered", k)
+				}
+			}
+			a, found, err := fromHost(h)
+			if !found || err != nil {
+				t.Fatalf("fromHost = %v, %v", found, err)
+			}
+			if got := ids(items(t, a)); !slices.Equal(got, []string{"r1"}) {
+				t.Fatalf("route ids = %v; want the extension's gateway", got)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built the gateway %d times; attach must read it through the extension", n)
+			}
+		})
+	}
+}
+
+// An extension with no gateway, or one Bastion has disabled, means there's
+// nothing to read: attach reports Bastion absent and doesn't fall back to
+// the container.
+func TestAttachExtensionWithoutGateway(t *testing.T) {
+	gw, _ := newGateway(t)
+	off, ok := bst.New(bst.WithEnabled(false)).(*bst.Gateway)
+	if !ok {
+		t.Fatal("not a gateway")
+	}
+	for name, x := range map[string]any{
+		"nil gateway":      bastionExt{},
+		"other getter":     struct{}{},
+		"disabled gateway": bastionExt{gw: off},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, built := countingContainer(t, gw)
+			w := newWitness(t)
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: w, Container: c, Logger: slog.New(slog.DiscardHandler),
+				Extension: extensions(map[string]any{"bastion": x}),
+			})
+			if found || err != nil {
+				t.Fatalf("attach = %v, %v; want false, nil", found, err)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built the gateway %d times", n)
+			}
+			if taken(t, w, KeyRoutes) {
+				t.Fatal("collectors were registered")
+			}
+		})
 	}
 }

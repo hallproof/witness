@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"reflect"
 	"time"
 
 	bst "github.com/xraph/bastion"
@@ -126,8 +128,8 @@ func init() {
 	})
 }
 
-// attach finds the app's own *bastion.Gateway in the host's container and
-// registers the collectors.
+// attach finds the app's own *bastion.Gateway, through the bastion
+// extension or else the container, and registers the collectors.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
 	a, found, err := fromHost(h)
 	if !found || err != nil {
@@ -136,21 +138,90 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	return true, a.Register(h.Witness)
 }
 
-// fromHost builds the adapter for the gateway in h's container, the only
-// gateway the adapter reads by default. Bastion has no tenants, so the
-// witness scope changes nothing here.
+// fromHost builds the adapter for the app's own gateway, the only gateway
+// the adapter reads by default. Bastion has no tenants, so the witness
+// scope changes nothing here.
 func fromHost(h adapter.Host) (*Adapter, bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*bst.Gateway](c) {
-		return nil, false, nil
+	gw, found, err := findGateway(h)
+	if !found || err != nil {
+		return nil, found, err
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return nil, true, err
 	}
+	return &Adapter{gw: gw, o: o}, true, nil
+}
+
+// extensionName is the name every Bastion Forge extension registers under.
+const extensionName = "bastion"
+
+// gatewayGetter is bastion/extension's Extension, read through its getter,
+// so the adapter needn't import that package.
+type gatewayGetter interface{ Gateway() *bst.Gateway }
+
+// findGateway returns the app's own gateway. It asks the bastion extension
+// first, like every adapter, so that it never makes the container build and
+// start an engine an extension already started. Bastion provides the
+// finished gateway, so its container entry is safe either way, but reading
+// the extension keeps the rule simple. Only an app that doesn't run a
+// bastion extension is looked up in the container.
+func findGateway(h adapter.Host) (*bst.Gateway, bool, error) {
+	if x, ok := h.Ext(extensionName); ok {
+		log := h.Logger
+		if log == nil {
+			log = slog.Default()
+		}
+		gw := gatewayOf(x)
+		if gw == nil {
+			log.Warn("witness: the bastion extension has no gateway, so bastion is skipped", "type", fmt.Sprintf("%T", x))
+			return nil, false, nil
+		}
+		if !gw.Config().Enabled {
+			// A disabled gateway isn't in the container either: Bastion
+			// provides it only when enabled.
+			return nil, false, nil
+		}
+		return gw, true, nil
+	}
+	c, ok := h.Container.(vessel.Vessel)
+	if !ok || c == nil || !vessel.HasType[*bst.Gateway](c) {
+		return nil, false, nil
+	}
 	gw, err := vessel.Inject[*bst.Gateway](c)
 	if err != nil {
 		return nil, true, fmt.Errorf("witness/bastion: resolve the gateway: %w", err)
 	}
-	return &Adapter{gw: gw, o: o}, true, nil
+	return gw, true, nil
+}
+
+// gatewayOf returns the gateway of x, whichever Bastion extension it is:
+// bastion/extension's has a Gateway getter, bastion.New returns the
+// *bastion.Gateway itself, and bastion/gateway's embeds it. It returns nil
+// for anything else.
+func gatewayOf(x any) *bst.Gateway {
+	switch v := x.(type) {
+	case gatewayGetter:
+		return v.Gateway()
+	case *bst.Gateway:
+		return v
+	}
+	rv := reflect.ValueOf(x)
+	if rv.Kind() == reflect.Pointer {
+		if rv.IsNil() {
+			return nil
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return nil
+	}
+	f, ok := rv.Type().FieldByName("Gateway")
+	if !ok || !f.Anonymous || !f.IsExported() {
+		return nil
+	}
+	if gw, ok := rv.FieldByIndex(f.Index).Interface().(*bst.Gateway); ok {
+		return gw
+	}
+	return nil
 }
