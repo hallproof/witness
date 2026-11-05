@@ -384,3 +384,62 @@ func TestRunStopsOnCancel(t *testing.T) {
 		t.Fatal("Run didn't return within 1s of its context ending")
 	}
 }
+
+// Review, Critical: evidence is pushed again on each new UTC day, so a
+// collector's newest evidence is never more than a day old.
+func TestRepushesEachDay(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 4, 10, 0, 0, 0, time.UTC)
+	f := &fakeSender{}
+	s := NewScheduler(f, nil, SchedulerOptions{Now: func() time.Time { mu.Lock(); defer mu.Unlock(); return now }})
+	if err := s.AddSnapshot(Snapshot{Key: "a", Title: "t", Collect: func(context.Context) (map[string]any, error) {
+		return map[string]any{"x": 1}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	s.runOnce(t.Context(), "a")
+	s.runOnce(t.Context(), "a")
+	if n := len(f.sent(push.KindConfigSnapshot)); n != 1 {
+		t.Fatalf("same day: %d pushed, want 1", n)
+	}
+	mu.Lock()
+	now = now.Add(24 * time.Hour)
+	mu.Unlock()
+	s.runOnce(t.Context(), "a")
+	if n := len(f.sent(push.KindConfigSnapshot)); n != 2 {
+		t.Fatalf("next day: %d pushed, want 2", n)
+	}
+}
+
+// Review, Important #2: a run that timed out must not move the proof's
+// starting checkpoint, even if the chain answers later.
+func TestProofCheckpointMovesOnlyOnSuccess(t *testing.T) {
+	fc := &fakeChain{}
+	var calls int
+	var mu sync.Mutex
+	fc.prove = func(chain.ProofRequest) (*push.EventProof, error) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			time.Sleep(80 * time.Millisecond) // ignores its context
+		}
+		return &push.EventProof{Cited: []uint64{1}, Checkpoint: push.Checkpoint{ID: "c1"}}, nil
+	}
+	s, f, _ := newTestScheduler(fc)
+	if err := s.AddEventProof(EventProof{Key: "p", Title: "t", Every: 20 * time.Millisecond, Stream: "s"}); err != nil {
+		t.Fatal(err)
+	}
+	s.runOnce(t.Context(), "p") // times out
+	time.Sleep(100 * time.Millisecond)
+	if n := len(f.sent(push.KindEventProof)); n != 0 {
+		t.Fatalf("a timed-out run pushed %d proofs", n)
+	}
+	s.runOnce(t.Context(), "p")
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	if len(fc.reqs) != 2 || fc.reqs[1].From != "" {
+		t.Fatalf("requests %+v, want the second to start from the beginning again", fc.reqs)
+	}
+}

@@ -52,18 +52,26 @@ type collector struct {
 	key   string
 	kind  push.Kind
 	every time.Duration
-	// collect runs the collector once. It returns the message to push, if
-	// any, and the hash to remember.
-	collect func(ctx context.Context, s *Scheduler, c *collector, now time.Time) (*push.Message, string, error)
+	// collect runs the collector once. It changes no scheduler state:
+	// runOnce commits what it returns, and only when the run succeeds.
+	collect func(ctx context.Context, s *Scheduler, c *collector, now time.Time) (run, error)
 
 	ran         bool
 	healthy     bool
 	failures    int
 	lastHash    string
 	lastPushed  string
+	pushedDay   string // the UTC day of the last push
 	lastSuccess time.Time
 	lastWarn    time.Time
 	from        string // event proofs: the last checkpoint proven
+}
+
+// run is what one successful collection produced.
+type run struct {
+	msg  *push.Message // the message to push, if any
+	hash string        // the content hash to remember
+	from string        // event proofs: the checkpoint reached, if it moved
 }
 
 // Scheduler runs collectors and pushes what they find.
@@ -152,13 +160,13 @@ func (s *Scheduler) AddSnapshot(sn Snapshot) error {
 	}
 	return s.add(sn.Key, sn.Title, sn.Every, &collector{
 		kind: push.KindConfigSnapshot,
-		collect: func(ctx context.Context, _ *Scheduler, _ *collector, now time.Time) (*push.Message, string, error) {
+		collect: func(ctx context.Context, _ *Scheduler, _ *collector, now time.Time) (run, error) {
 			settings, err := sn.Collect(ctx)
 			if err != nil {
-				return nil, "", err
+				return run{}, err
 			}
 			m, hash, err := SnapshotMessage(sn, settings, now)
-			return &m, hash, err
+			return run{msg: &m, hash: hash}, err
 		},
 	})
 }
@@ -170,13 +178,13 @@ func (s *Scheduler) AddPopulation(p Population) error {
 	}
 	return s.add(p.Key, p.Title, p.Every, &collector{
 		kind: push.KindPopulation,
-		collect: func(ctx context.Context, _ *Scheduler, _ *collector, now time.Time) (*push.Message, string, error) {
+		collect: func(ctx context.Context, _ *Scheduler, _ *collector, now time.Time) (run, error) {
 			items, err := p.Collect(ctx)
 			if err != nil {
-				return nil, "", err
+				return run{}, err
 			}
 			m, hash, err := PopulationMessage(p, items, now)
-			return &m, hash, err
+			return run{msg: &m, hash: hash}, err
 		},
 	})
 }
@@ -192,29 +200,28 @@ func (s *Scheduler) AddEventProof(e EventProof) error {
 	}
 	return s.add(e.Key, e.Title, e.Every, &collector{
 		kind: push.KindEventProof,
-		collect: func(ctx context.Context, s *Scheduler, c *collector, now time.Time) (*push.Message, string, error) {
+		collect: func(ctx context.Context, s *Scheduler, c *collector, now time.Time) (run, error) {
 			s.mu.Lock()
 			from, last := c.from, c.lastHash
 			s.mu.Unlock()
 			proof, err := s.chain.Prove(ctx, chain.ProofRequest{Stream: e.Stream, From: from, Actions: e.Actions})
 			switch {
 			case errors.Is(err, chain.ErrNoChain):
-				return nil, "", errSkip
+				return run{}, errSkip
 			case errors.Is(err, chain.ErrNothingNew):
-				return nil, last, nil
+				return run{hash: last}, nil
 			case err != nil:
-				return nil, "", err
+				return run{}, err
 			case proof == nil || proof.Checkpoint.ID == "":
-				return nil, "", errors.New("witness: the chain returned a proof without a checkpoint")
+				return run{}, errors.New("witness: the chain returned a proof without a checkpoint")
 			}
-			s.mu.Lock()
-			c.from = proof.Checkpoint.ID
-			s.mu.Unlock()
+			r := run{hash: proof.Checkpoint.ToHash, from: proof.Checkpoint.ID}
 			if len(proof.Cited) == 0 {
-				return nil, proof.Checkpoint.ToHash, nil
+				return r, nil
 			}
 			m, err := ProofMessage(e, proof, now)
-			return &m, proof.Checkpoint.ToHash, err
+			r.msg = &m
+			return r, err
 		},
 	})
 }
@@ -295,9 +302,8 @@ func (s *Scheduler) runOnce(ctx context.Context, key string) {
 	runCtx, cancel := context.WithTimeout(ctx, c.every)
 	defer cancel()
 	type outcome struct {
-		msg  *push.Message
-		hash string
-		err  error
+		r   run
+		err error
 	}
 	done := make(chan outcome, 1)
 	go func() {
@@ -307,8 +313,8 @@ func (s *Scheduler) runOnce(ctx context.Context, key string) {
 				done <- outcome{err: fmt.Errorf("panic: %v", p)}
 			}
 		}()
-		m, h, err := c.collect(runCtx, s, c, s.o.Now())
-		done <- outcome{m, h, err}
+		r, err := c.collect(runCtx, s, c, s.o.Now())
+		done <- outcome{r, err}
 	}()
 
 	var out outcome
@@ -340,14 +346,23 @@ func (s *Scheduler) runOnce(ctx context.Context, key string) {
 		return
 	}
 	c.healthy, c.failures, c.lastWarn = true, 0, time.Time{}
-	c.lastHash, c.lastSuccess = out.hash, now
-	changed := out.msg != nil && out.hash != c.lastPushed
+	c.lastHash, c.lastSuccess = out.r.hash, now
+	if out.r.from != "" {
+		c.from = out.r.from
+	}
+	// Push on the first run, when the state changes, and once each new UTC
+	// day, since the day is part of the message ID.
+	var day string
+	if out.r.msg != nil {
+		day = Day(out.r.msg.CollectedAt)
+	}
+	changed := out.r.msg != nil && (out.r.hash != c.lastPushed || day != c.pushedDay)
 	if changed {
-		c.lastPushed = out.hash
+		c.lastPushed, c.pushedDay = out.r.hash, day
 	}
 	s.mu.Unlock()
 	if changed {
-		s.send.Enqueue(*out.msg)
+		s.send.Enqueue(*out.r.msg)
 	}
 }
 

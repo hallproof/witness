@@ -10,17 +10,23 @@ import (
 	"github.com/hallproof/witness/push"
 )
 
-// MessageID is an evidence message's ID: the collector's key, a colon, and
-// the hex sha256 of the body's canonical JSON.
+// MessageID is an evidence message's ID: the collector's key, the hex sha256
+// of the body's canonical JSON, and the UTC day it was collected, joined by
+// colons, as in "auth-settings:6f1e...:20261104".
 //
-// Copies of an app that collect the same state build the same ID, so
-// Hallproof keeps one and answers the rest "duplicate". Changing anything in
-// the body, the title and tests included, changes the ID, so Hallproof never
-// sees one ID with two bodies.
-func MessageID(key string, canonicalBody []byte) string {
+// Copies of an app that collect the same state on the same day build the
+// same ID, so Hallproof keeps one and answers the rest "duplicate". Changing
+// anything in the body, the title and tests included, changes the ID, so
+// Hallproof never sees one ID with two bodies. The day means a state that
+// comes back to an earlier value on a later day is new evidence, not a
+// duplicate of the old one.
+func MessageID(key string, canonicalBody []byte, at time.Time) string {
 	sum := sha256.Sum256(canonicalBody)
-	return key + ":" + hex.EncodeToString(sum[:])
+	return key + ":" + hex.EncodeToString(sum[:]) + ":" + Day(at)
 }
+
+// Day is the UTC day at falls on, as YYYYMMDD.
+func Day(at time.Time) string { return at.UTC().Format("20060102") }
 
 func common(title, description string, tests []string) push.Common {
 	return push.Common{Title: title, Description: description, Tests: tests}
@@ -32,7 +38,7 @@ func evidence(key string, kind push.Kind, body any, at time.Time) (push.Message,
 	if err != nil {
 		return push.Message{}, fmt.Errorf("witness: collector %q: %w", key, err)
 	}
-	return push.Message{ID: MessageID(key, canonical), Kind: kind, CollectedAt: at, Body: canonical}, nil
+	return push.Message{ID: MessageID(key, canonical, at), Kind: kind, CollectedAt: at, Body: canonical}, nil
 }
 
 // SnapshotMessage builds s's message for settings collected at at, and

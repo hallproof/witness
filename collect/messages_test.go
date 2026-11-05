@@ -53,11 +53,11 @@ func TestSnapshotMessage(t *testing.T) {
 		t.Fatalf("common %+v", body.Common)
 	}
 	canonical := mustOK(push.Canonical(body))
-	if want := collect.MessageID("auth-settings", canonical); m.ID != want {
+	if want := collect.MessageID("auth-settings", canonical, at); m.ID != want {
 		t.Fatalf("id %s, want %s", m.ID, want)
 	}
-	if !strings.HasPrefix(m.ID, "auth-settings:") || len(m.ID) != len("auth-settings:")+64 {
-		t.Fatalf("id %q isn't key:hex", m.ID)
+	if !strings.HasPrefix(m.ID, "auth-settings:") || len(m.ID) != len("auth-settings:")+64+len(":20261104") {
+		t.Fatalf("id %q isn't key:hex:day", m.ID)
 	}
 }
 
@@ -199,5 +199,51 @@ func TestNilCollectionsAreEmpty(t *testing.T) {
 	pop, _, err := collect.PopulationMessage(collect.Population{Key: "k", Title: "t"}, nil, at)
 	if err != nil || !strings.Contains(string(pop.Body), `"items":[]`) {
 		t.Fatalf("nil items: %s, %v", pop.Body, err)
+	}
+}
+
+// Review, Critical: a state that returns to an earlier value must reach
+// Hallproof as new evidence, not as a duplicate of the old one.
+func TestIDChangesDaily(t *testing.T) {
+	s := collect.Snapshot{Key: "k", Title: "t"}
+	late := time.Date(2026, 11, 4, 23, 59, 0, 0, time.UTC)
+	a, _, _ := collect.SnapshotMessage(s, map[string]any{"x": 1}, late)
+	b, _, _ := collect.SnapshotMessage(s, map[string]any{"x": 1}, late.Add(-23*time.Hour))
+	c, _, _ := collect.SnapshotMessage(s, map[string]any{"x": 1}, late.Add(2*time.Minute))
+	if a.ID != b.ID {
+		t.Fatalf("same day, different ids: %s, %s", a.ID, b.ID)
+	}
+	if a.ID == c.ID {
+		t.Fatal("the next day kept the id")
+	}
+	if !strings.HasSuffix(a.ID, ":20261104") || !strings.HasSuffix(c.ID, ":20261105") {
+		t.Fatalf("ids %s and %s don't end in their UTC day", a.ID, c.ID)
+	}
+}
+
+func TestReturnToEarlierStateIsNewEvidence(t *testing.T) {
+	day := func(n int) time.Time { return at.AddDate(0, 0, n) }
+	srv := ingesttest.New(t, ingesttest.WithNow(func() time.Time { return day(30) }))
+	s := collect.Snapshot{Key: "auth", Title: "Auth"}
+	off := map[string]any{"mfa": "optional"}
+	on := map[string]any{"mfa": "required"}
+	for _, step := range []struct {
+		settings map[string]any
+		at       time.Time
+	}{{off, day(1)}, {on, day(2)}, {off, day(30)}} {
+		m, _, _ := collect.SnapshotMessage(s, step.settings, step.at)
+		raw, _ := json.Marshal(push.Batch{Version: push.Version, Messages: []push.Message{m}})
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+"/api/v1/ingest", strings.NewReader(string(raw)))
+		req.Header.Set("Authorization", "Bearer "+srv.Key)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out push.Response
+		_ = json.NewDecoder(res.Body).Decode(&out)
+		res.Body.Close()
+		if out.Results[0].Status != push.StatusAccepted {
+			t.Fatalf("%v on %v: %+v, want accepted", step.settings, step.at, out.Results[0])
+		}
 	}
 }
