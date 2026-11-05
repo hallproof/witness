@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  # required by go-ci.yml's gosec SARIF upload
+  security-events: write
+
+jobs:
+  # Test, lint, verify and security come from the shared workflow. Witness is
+  # one module today; the adapters in piece D become a matrix over modules.
+  ci:
+    uses: xraph/workflows/.github/workflows/go-ci.yml@v1
+    with:
+      go-versions: '["1.25","1.26"]'
+      primary-go-version: "1.26"
+      os: '["ubuntu-latest"]'
+      prefer-makefile: false
+      codecov-flag-name: witness
+    secrets:
+      # The upload is skipped when the org has no token.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
