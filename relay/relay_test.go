@@ -281,10 +281,7 @@ func TestAttachPrefersRawEndpointStore(t *testing.T) {
 		t.Fatalf("%s was not registered", KeyEndpoints)
 	}
 
-	resolved, err := resolve(c, Options{StaffTenants: []string{staff}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	resolved := resolve(t, adapter.Host{Container: c}, Options{StaffTenants: []string{staff}})
 	for name, a := range map[string]*Adapter{
 		"resolved": resolved,
 		"explicit": New(r, WithStaffTenants(staff), WithEndpointStore(raw)),
@@ -731,4 +728,118 @@ func TestWidenedDescriptions(t *testing.T) {
 	if strings.Contains(narrow, "customers") {
 		t.Errorf("endpoints by default: %q", narrow)
 	}
+}
+
+// relayExt stands in for Relay's Forge extension: only its getter.
+type relayExt struct{ r *xrelay.Relay }
+
+func (x relayExt) Relay() *xrelay.Relay { return x.r }
+
+// extHost is a host whose app runs ext under Relay's extension name.
+func extHost(t *testing.T, c any, ext any) (adapter.Host, *witness.Witness) {
+	t.Helper()
+	w := newWitness(t)
+	return adapter.Host{
+		Witness:   w,
+		Container: c,
+		Config:    map[string]any{"staff_tenants": []any{staff}},
+		Extension: func(name string) (any, bool) {
+			if name == "relay" {
+				return ext, true
+			}
+			return nil, false
+		},
+	}, w
+}
+
+// countingContainer registers the Relay with a constructor, as Relay's
+// extension does, and counts how often the container builds it.
+func countingContainer(t *testing.T, r *xrelay.Relay) (vessel.Vessel, *int) {
+	t.Helper()
+	calls := new(int)
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*xrelay.Relay, error) {
+		*calls++
+		return r, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, calls
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.r)
+	h, w := extHost(t, c, relayExt{r: f.r})
+	found, err := attach(context.Background(), h)
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the Relay %d times; want 0", *calls)
+	}
+	for _, k := range []string{KeyEndpoints, KeyPosture, KeyEventTypes} {
+		if !taken(t, w, k) {
+			t.Errorf("%s was not registered", k)
+		}
+	}
+}
+
+func TestAttachExtensionWithoutRelay(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.r)
+	if err := vessel.ProvideValue[endpoint.Store](c, f.st); err != nil {
+		t.Fatal(err)
+	}
+	h, w := extHost(t, c, relayExt{})
+	found, err := attach(context.Background(), h)
+	if found || err != nil {
+		t.Fatalf("attach = %v, %v; want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the Relay %d times; want 0", *calls)
+	}
+	if taken(t, w, KeyPosture) {
+		t.Errorf("%s was registered with no Relay", KeyPosture)
+	}
+}
+
+// With Relay's extension running, a raw endpoint.Store the app provides as
+// a value still wins for endpoints, and the Relay still comes from the
+// extension.
+func TestAttachExtensionKeepsRawEndpointStore(t *testing.T) {
+	raw := memory.New()
+	r, err := xrelay.New(xrelay.WithStore(lockedStore{raw}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fixture{st: raw, r: r}
+	ep := f.addEndpoint(t, &endpoint.Endpoint{Enabled: true})
+	f.addType(t, &catalog.EventType{Definition: catalog.WebhookDefinition{Name: "invoice.paid"}})
+
+	c, calls := countingContainer(t, r)
+	if err = vessel.ProvideValue[endpoint.Store](c, raw); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := extHost(t, c, relayExt{r: r})
+	a := resolve(t, h, Options{StaffTenants: []string{staff}})
+	if *calls != 0 {
+		t.Fatalf("the container built the Relay %d times; want 0", *calls)
+	}
+	if got := ids(items(t, a, KeyEndpoints)); !slices.Equal(got, []string{ep.ID.String()}) {
+		t.Fatalf("endpoints = %v", got)
+	}
+	if got := items(t, a, KeyEventTypes); len(got) != 1 {
+		t.Fatalf("event types = %v", got)
+	}
+}
+
+// resolve builds the adapter attach would build for h.
+func resolve(t *testing.T, h adapter.Host, o Options) *Adapter {
+	t.Helper()
+	r, eps, found, err := find(h)
+	if !found || err != nil {
+		t.Fatalf("find = %v, %v; want found, nil", found, err)
+	}
+	return build(r, eps, o)
 }

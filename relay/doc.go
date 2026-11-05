@@ -8,14 +8,23 @@
 //
 //	import _ "github.com/hallproof/witness/relay"
 //
-// The witness extension looks in the container for an endpoint.Store and
-// for *relay.Relay. Relay's own Forge extension provides *relay.Relay. If
-// you build Relay yourself, provide it with forge.ProvideValue(c, r).
+// The adapter asks Relay's own Forge extension ("relay") for the
+// *relay.Relay, through its Relay method. Only when your app doesn't run
+// that extension does it look for a *relay.Relay in the container. The
+// order matters: the extension registers the Relay with a constructor, and
+// a container that builds it on request starts it again. An extension that
+// has no Relay yet counts as no relay, and the adapter logs it. If you
+// build Relay yourself, provide the finished value with
+// forge.ProvideValue(c, r), not a constructor.
 //
 // If the store you gave Relay wraps the database store to encrypt signing
 // secrets, also provide the raw database store as an endpoint.Store:
 //
 //	vessel.ProvideValue[endpoint.Store](c, relaypg.New(db))
+//
+// The adapter reads that store from the container whether or not Relay's
+// extension runs. Relay's extension never provides one, so provide it as a
+// value as shown.
 //
 // The adapter then reads endpoints through that store and never decrypts a
 // secret. A wrapper that decrypts on every list fails the whole list when

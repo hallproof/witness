@@ -237,34 +237,36 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, error)
 	return pops, snaps, nil
 }
 
+// extensionName is Relay's own Forge extension, which builds and starts
+// the Relay.
+const extensionName = "relay"
+
 func init() {
 	adapter.Register(adapter.Adapter{
 		Name:   Name,
 		Module: Module,
-		After:  []string{"relay"},
+		After:  []string{extensionName},
 		Attach: attach,
 	})
 }
 
-// attach finds relay in the host's container and registers the
-// collectors.
+// attach finds relay through its extension or the host's container and
+// registers the collectors.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || (!vessel.HasType[*xrelay.Relay](c) && !vessel.HasType[endpoint.Store](c)) {
-		return false, nil
+	r, eps, found, err := find(h)
+	if !found || err != nil {
+		return found, err
 	}
 	var o Options
-	if err := adapter.Decode(h.Config, &o); err != nil {
+	err = adapter.Decode(h.Config, &o)
+	if err != nil {
 		return true, err
 	}
 	// The host reports its own all-tenants scope; this is the adapter's.
 	own := o.AllTenants
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	o.log = h.Logger
-	a, err := resolve(c, o)
-	if err != nil {
-		return true, err
-	}
+	a := build(r, eps, o)
 	err = a.Register(h.Witness)
 	if errors.Is(err, ErrNoTenants) {
 		a.log.Warn("witness: relay found, but no staff_tenants are set and the posture snapshot is off, so nothing is collected")
@@ -279,26 +281,70 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	return true, nil
 }
 
-// resolve builds the adapter from a container. A bare endpoint.Store
-// wins for endpoints, because an app that wraps Relay's store to decrypt
-// secrets provides the raw one for this; the Relay, when present, supplies
-// the event catalog.
-func resolve(c vessel.Vessel, o Options) (*Adapter, error) {
+// find returns the app's Relay and any bare endpoint.Store it provides.
+// found is false when the app has neither.
+//
+// The Relay comes through Relay's extension when the app runs it, and the
+// container is never asked for it then: the extension registers the Relay
+// with a constructor, and a container that builds it starts it a second
+// time. Only an app without the extension is looked up in the container,
+// where an app that builds its own Relay provides the finished value. An
+// extension with no Relay yet counts as no relay.
+//
+// The bare endpoint.Store always comes from the container. Relay's
+// extension doesn't provide one; an app that wraps Relay's store to decrypt
+// secrets provides the raw one, as a value, for this adapter.
+func find(h adapter.Host) (*xrelay.Relay, endpoint.Store, bool, error) {
+	var r *xrelay.Relay
+	ext := false
+	if x, ok := h.Ext(extensionName); ok {
+		if g, ok := x.(interface{ Relay() *xrelay.Relay }); ok {
+			if r = g.Relay(); r == nil {
+				logger(h).Warn("witness/relay: the relay extension has no Relay yet, so nothing is collected")
+				return nil, nil, false, nil
+			}
+			ext = true
+		}
+	}
+	c, ok := h.Container.(vessel.Vessel)
+	if !ok || c == nil {
+		return r, nil, ext, nil
+	}
+	var eps endpoint.Store
 	if vessel.HasType[endpoint.Store](c) {
 		st, err := vessel.Inject[endpoint.Store](c)
 		if err != nil {
-			return nil, fmt.Errorf("witness/relay: resolve the endpoint store: %w", err)
+			return nil, nil, true, fmt.Errorf("witness/relay: resolve the endpoint store: %w", err)
 		}
-		o.endpoints = st
+		eps = st
 	}
-	if vessel.HasType[*xrelay.Relay](c) {
-		r, err := vessel.Inject[*xrelay.Relay](c)
+	if !ext && vessel.HasType[*xrelay.Relay](c) {
+		got, err := vessel.Inject[*xrelay.Relay](c)
 		if err != nil {
-			return nil, fmt.Errorf("witness/relay: resolve relay: %w", err)
+			return nil, nil, true, fmt.Errorf("witness/relay: resolve relay: %w", err)
 		}
-		return New(r, withOptions(o)), nil
+		r = got
 	}
-	return NewFromStore(o.endpoints, withOptions(o)), nil
+	return r, eps, r != nil || eps != nil, nil
+}
+
+// build makes the adapter. A bare endpoint.Store wins for endpoints; the
+// Relay, when there is one, supplies the event catalog.
+func build(r *xrelay.Relay, eps endpoint.Store, o Options) *Adapter {
+	if eps != nil {
+		o.endpoints = eps
+	}
+	if r != nil {
+		return New(r, withOptions(o))
+	}
+	return NewFromStore(o.endpoints, withOptions(o))
+}
+
+func logger(h adapter.Host) *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
 }
 
 func withOptions(o Options) Option { return func(dst *Options) { *dst = o } }
