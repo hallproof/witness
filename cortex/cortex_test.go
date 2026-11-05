@@ -427,6 +427,28 @@ func TestAttachWithoutOrgRegistersNothing(t *testing.T) {
 	}
 }
 
+// Orgs is a list the host names itself, and cortex has no all-tenants
+// mode, so attach never reports a widened scope.
+func TestAttachNeverWidens(t *testing.T) {
+	f := newFixture(t)
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.eng); err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	found, err := attach(context.Background(), adapter.Host{
+		Witness: newWitness(t), Container: c, Scope: adapter.Scope{AllTenants: true},
+		Config: map[string]any{"org": staffOrg, "orgs": []any{"org_customer"}},
+		Widen:  func(r string) { got = append(got, r) },
+	})
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("Widen calls = %v, want none", got)
+	}
+}
+
 func TestRegisterNeedsAScope(t *testing.T) {
 	f := newFixture(t)
 	for name, opts := range map[string][]Option{
