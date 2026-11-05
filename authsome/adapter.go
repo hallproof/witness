@@ -172,6 +172,8 @@ func New(eng *authsome.Engine, opts ...Option) *Adapter {
 }
 
 // Register adds the adapter's collectors to w. Call it before w.Start.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	if a.eng == nil {
 		return errors.New("witness/authsome: no engine")
@@ -180,20 +182,12 @@ func (a *Adapter) Register(w *witness.Witness) error {
 		return errors.New("witness/authsome: no witness")
 	}
 	snaps, pops, proofs := a.collectors()
-	for _, s := range snaps {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, e := range proofs {
-		if err := w.EventProof(e); err != nil {
-			return err
-		}
+	var set adapter.Set
+	set.Snapshot(snaps...)
+	set.Population(pops...)
+	set.EventProof(proofs...)
+	if err := set.Register(w); err != nil {
+		return err
 	}
 	a.log.Info("witness/authsome: collecting", "staff", a.staffRule(), "collectors", len(snaps)+len(pops)+len(proofs))
 	return nil
