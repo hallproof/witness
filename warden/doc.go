@@ -12,7 +12,8 @@
 // does it look for a *warden.Engine in the container. The order matters:
 // the extension registers the engine with a constructor, and a container
 // that builds it on request starts it again. An extension that has no
-// engine yet counts as no Warden, and the adapter logs it. If you build the
+// Engine method, or no engine yet, counts as no Warden: the adapter logs it
+// and doesn't look in the container either. If you build the
 // engine yourself, provide the finished value with forge.ProvideValue(c,
 // eng), not a constructor, or, when you build the witness config in Go,
 // put it under the "engine" key of the adapter's section (ConfigEngine).

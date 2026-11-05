@@ -1,6 +1,7 @@
 package warden
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -722,3 +723,24 @@ type countingExt struct {
 }
 
 func (x *countingExt) Engine() *xwarden.Engine { x.calls++; return x.eng }
+
+func TestAttachExtensionWithoutGetterSkipsTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.eng)
+	h, w := host(t, c, nil)
+	var logs bytes.Buffer
+	h.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	found, err := attachRegistered(t, withExt(h, struct{}{}))
+	if found || err != nil {
+		t.Fatalf("Attach = %v, %v; want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "no Engine getter") {
+		t.Fatalf("no warning about the missing getter; logs:\n%s", logs.String())
+	}
+	if registered(w, "warden.roles") {
+		t.Error("warden.roles is registered without the extension's engine")
+	}
+}

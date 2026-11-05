@@ -320,22 +320,27 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 // engine under the config's ConfigEngine key comes first. Next it reads the
 // engine through Warden's extension when the app runs it, and never asks
 // the container then: the extension registers the engine with a
-// constructor, and a container that builds it starts it a second time.
-// Only an app without the extension is looked up in the container, where an
-// app that builds its own engine provides the finished value. It fails when
+// constructor, and a container that builds it starts it a second time. An
+// extension with no Engine getter, or no engine yet, counts as no Warden
+// and is logged. Only an app without the extension is looked up in the
+// container, where an app that builds its own engine provides the finished
+// value. It fails when
 // the container has an engine that won't resolve.
 func engine(h adapter.Host) (*warden.Engine, error) {
 	if eng, ok := h.Config[ConfigEngine].(*warden.Engine); ok && eng != nil {
 		return eng, nil
 	}
 	if x, ok := h.Ext(extensionName); ok {
-		if g, ok := x.(interface{ Engine() *warden.Engine }); ok {
-			if eng := g.Engine(); eng != nil {
-				return eng, nil
-			}
-			logger(h).Warn("witness/warden: the warden extension has no engine yet, so nothing is collected")
+		g, ok := x.(interface{ Engine() *warden.Engine })
+		if !ok {
+			logger(h).Warn("witness/warden: the warden extension has no Engine getter, so nothing is collected", "type", fmt.Sprintf("%T", x))
 			return nil, nil
 		}
+		if eng := g.Engine(); eng != nil {
+			return eng, nil
+		}
+		logger(h).Warn("witness/warden: the warden extension has no engine yet, so nothing is collected")
+		return nil, nil
 	}
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil || !vessel.HasType[*warden.Engine](c) {
