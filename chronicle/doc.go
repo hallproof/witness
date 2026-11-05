@@ -82,8 +82,11 @@
 //
 // # Options
 //
-// WithStream names more streams Prove accepts besides Platform (a full
-// Chronicle stream ID works too). WithMaxSegment sets the segment limit.
+// WithStream names more streams Prove accepts besides Platform. Prove also
+// takes the Chronicle stream ID of one of those streams, but never any other
+// stream ID, so code can't prove a stream you didn't configure, such as a
+// customer's; its error lists the names it takes. WithMaxSegment sets the
+// segment limit.
 // WithSigner checks each checkpoint's signature with your app's own
 // checkpoint.Signer before a proof leaves. WithLogger sets the logger.
 // In Forge, the adapter's config section takes the first two:

@@ -58,6 +58,8 @@ var _ chain.Chain = (*Chain)(nil)
 type Option func(*Chain)
 
 // WithStream lets Prove take name for the stream of s, beside Platform.
+// Prove takes the stream's Chronicle ID too, and refuses every stream not
+// named this way.
 func WithStream(name string, s Scope) Option {
 	return func(c *Chain) {
 		switch {

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	xchronicle "github.com/xraph/chronicle"
 	"github.com/xraph/chronicle/audit"
@@ -21,7 +23,9 @@ import (
 const page = 1000
 
 // Prove proves the checkpoint after r.From on r.Stream, or the stream's
-// newest checkpoint when r.From is empty or unknown. Starting from the
+// newest checkpoint when r.From is empty or unknown. r.Stream is Platform,
+// a name WithStream added, or the Chronicle stream ID of one of those
+// streams; any other stream is an error. Starting from the
 // newest is deliberate: the scheduler forgets r.From on every restart,
 // and the oldest would re-walk the whole history on each deploy.
 //
@@ -137,8 +141,11 @@ func (c *Chain) Prove(ctx context.Context, r chain.ProofRequest) (*push.EventPro
 	return &push.EventProof{Cited: provable, Segment: seg, Checkpoint: pc}, nil
 }
 
-// resolve finds the stream ID for name: an alias, or a Chronicle stream ID.
-// A scope with no stream yet is chain.ErrNothingNew.
+// resolve finds the stream ID for name: one of the chain's stream names
+// (Platform and those WithStream added), or the Chronicle stream ID of one
+// of those streams. Any other stream, a customer tenant's included, is an
+// error that lists the names Prove takes. A named scope with no stream yet
+// is chain.ErrNothingNew.
 func (c *Chain) resolve(ctx context.Context, name string) (id.ID, error) {
 	if s, ok := c.streams[name]; ok {
 		st, err := c.store.GetStreamByScope(ctx, s.AppID, s.TenantID)
@@ -152,9 +159,41 @@ func (c *Chain) resolve(ctx context.Context, name string) (id.ID, error) {
 	}
 	streamID, err := id.ParseWithPrefix(name, id.PrefixStream)
 	if err != nil {
-		return id.ID{}, fmt.Errorf("witness/chronicle: stream %q is neither a stream name the chain knows nor a Chronicle stream ID", name)
+		return id.ID{}, c.unknownStream(name)
 	}
-	return streamID, nil
+	for _, alias := range c.streamNames() {
+		s := c.streams[alias]
+		st, err := c.store.GetStreamByScope(ctx, s.AppID, s.TenantID)
+		if errors.Is(err, xchronicle.ErrStreamNotFound) {
+			continue
+		}
+		if err != nil {
+			return id.ID{}, fmt.Errorf("witness/chronicle: stream %q: %w", alias, err)
+		}
+		if st.ID.String() == streamID.String() {
+			return st.ID, nil
+		}
+	}
+	return id.ID{}, c.unknownStream(name)
+}
+
+// streamNames are the chain's stream names, sorted.
+func (c *Chain) streamNames() []string {
+	names := make([]string, 0, len(c.streams))
+	for n := range c.streams {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// unknownStream is the error for a stream Prove doesn't take.
+func (c *Chain) unknownStream(name string) error {
+	quoted := make([]string, 0, len(c.streams))
+	for _, n := range c.streamNames() {
+		quoted = append(quoted, strconv.Quote(n))
+	}
+	return fmt.Errorf("witness/chronicle: Prove doesn't take stream %q; it takes %s, or the Chronicle stream ID of one of those streams", name, strings.Join(quoted, ", "))
 }
 
 // checkpoint looks a checkpoint up by its ID text.

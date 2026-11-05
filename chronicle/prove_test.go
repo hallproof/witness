@@ -448,3 +448,51 @@ func TestProveFromAnotherStreamsCheckpoint(t *testing.T) {
 		t.Fatalf("from another stream's checkpoint: %s, want the platform's newest %s", p.Checkpoint.ID, cp.ID)
 	}
 }
+
+// Prove takes only the configured stream names, or the ID of one of those
+// streams. Any other stream, a customer tenant's included, is refused.
+func TestProveRefusesStreamsNotConfigured(t *testing.T) {
+	billing := wchronicle.Scope{AppID: appID, TenantID: "billing-staff"}
+	customer := wchronicle.Scope{AppID: appID, TenantID: "customer-acme"}
+	f := newFixture(t, wchronicle.WithStream("billing", billing))
+	ctx := context.Background()
+	streamOf := func(s wchronicle.Scope) string {
+		t.Helper()
+		if err := f.trail.Info(ctx, "invoice.void", "invoice", "inv-1").Category("billing").
+			AppID(s.AppID).TenantID(s.TenantID).Record(); err != nil {
+			t.Fatal(err)
+		}
+		st, err := f.trail.Store().GetStreamByScope(ctx, s.AppID, s.TenantID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.cps.CheckpointStream(ctx, checkpoint.StreamHead{
+			ID: st.ID, AppID: st.AppID, TenantID: st.TenantID, HeadSeq: st.HeadSeq, HeadHash: st.HeadHash,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return st.ID.String()
+	}
+	billingID, customerID := streamOf(billing), streamOf(customer)
+	f.record(1, "user.login", nil)
+	f.checkpoint()
+	platformID := f.stream().ID.String()
+
+	for _, name := range []string{wchronicle.Platform, "billing", billingID, platformID} {
+		if _, err := f.chain.Prove(ctx, chain.ProofRequest{Stream: name, Actions: []string{"invoice.void", "user.login"}}); err != nil {
+			t.Errorf("stream %q: %v", name, err)
+		}
+	}
+	for _, name := range []string{customerID, "nope"} {
+		_, err := f.chain.Prove(ctx, chain.ProofRequest{Stream: name, Actions: []string{"invoice.void"}})
+		if err == nil || isNothingNew(err) {
+			t.Errorf("stream %q: %v, want an error", name, err)
+			continue
+		}
+		for _, allowed := range []string{`"billing"`, `"platform"`} {
+			if !strings.Contains(err.Error(), allowed) {
+				t.Errorf("stream %q: error %q doesn't name the allowed stream %s", name, err, allowed)
+			}
+		}
+	}
+}
