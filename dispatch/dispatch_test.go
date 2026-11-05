@@ -249,7 +249,7 @@ func TestScheduledJobs(t *testing.T) {
 	weekday := f.addCron(t, &cron.Entry{Name: "weekday-report", Schedule: "0 9 * * 1-5", JobName: "report", Enabled: false})
 	every := f.addCron(t, &cron.Entry{Name: "tick", Schedule: "@every 90s", JobName: "tick", Enabled: true})
 
-	items := run(t, f.adapter(), KeyScheduledJobs)
+	items := run(t, f.adapter(WithAppID("app-platform")), KeyScheduledJobs)
 	assertJSON(t, items, []map[string]any{
 		{
 			"id": "nightly-backup", "cron_id": nightly.ID.String(), "schedule": "0 3 * * *", "job_name": "db.backup",
@@ -441,6 +441,145 @@ func TestStaffScope(t *testing.T) {
 			t.Fatalf("customer runs leaked into the staff item: %v", m["nightly-backup"])
 		}
 	})
+}
+
+// Authsome gives a session with no org an app-only scope, and a
+// background worker enqueues a per-customer job with no org at all (the
+// org is only in its payload). Neither is staff unless the app is the
+// witness scope's own app.
+func TestStaffNeedsThePlatformApp(t *testing.T) {
+	const platform, other = "app-platform", "app-other"
+	f := newFixture(t)
+	f.addCron(t, &cron.Entry{Name: "nightly-backup", Schedule: "0 3 * * *", JobName: "db.backup", ScopeAppID: platform, Enabled: true})
+	f.addCron(t, &cron.Entry{Name: "other-backup", Schedule: "0 4 * * *", JobName: "db.backup", ScopeAppID: other, Enabled: true})
+
+	mine := done("db.backup", ago(5*time.Hour))
+	mine.ScopeAppID = platform
+	f.addJob(t, mine)
+	unscoped := done("db.backup", ago(4*time.Hour))
+	f.addJob(t, unscoped)
+	theirs := done("db.backup", ago(3*time.Hour))
+	theirs.ScopeAppID = other
+	f.addJob(t, theirs)
+	theirsFail := failed("db.backup", ago(2*time.Hour))
+	theirsFail.ScopeAppID = other
+	f.addJob(t, theirsFail)
+
+	t.Run("default", func(t *testing.T) {
+		a := f.adapter(WithBackupJobs("db.backup"), WithAppID(platform))
+		if got := ids(run(t, a, KeyScheduledJobs)); !slices.Equal(got, []string{"nightly-backup"}) {
+			t.Fatalf("scheduled ids = %v", got)
+		}
+		items := run(t, a, KeyBackupRuns)
+		if got := ids(items); !slices.Equal(got, []string{"nightly-backup"}) {
+			t.Fatalf("backup ids = %v", got)
+		}
+		if it := items[0]; it["succeeded_24h"] != 2 || it["failed_24h"] != 0 {
+			t.Fatalf("another app's run was counted as staff: %v", it)
+		}
+	})
+
+	t.Run("no app set", func(t *testing.T) {
+		// With no app, only rows with no app at all are staff.
+		a := f.adapter(WithBackupJobs("db.backup"))
+		items := run(t, a, KeyBackupRuns)
+		if got := ids(items); !slices.Equal(got, []string{"db.backup"}) {
+			t.Fatalf("backup ids = %v", got)
+		}
+		if it := items[0]; it["succeeded_24h"] != 1 || it["failed_24h"] != 0 {
+			t.Fatalf("an app-scoped run was counted as staff: %v", it)
+		}
+	})
+
+	t.Run("all tenants", func(t *testing.T) {
+		a := f.adapter(WithBackupJobs("db.backup"), WithAppID(platform), WithAllTenants())
+		m := byID(run(t, a, KeyJobRuns))
+		if s := m["nightly-backup"]; s == nil || s["succeeded_24h"] != 2 || s["failed_24h"] != 0 {
+			t.Fatalf("another app's runs leaked into the staff item: %v", m)
+		}
+		o := m["nightly-backup@app:"+other]
+		if o == nil || o["succeeded_24h"] != 1 || o["failed_24h"] != 1 || o["scope_org_id"] != "" {
+			t.Fatalf("job runs = %v", m)
+		}
+	})
+}
+
+func TestAttachAppIDFromScope(t *testing.T) {
+	f := newFixture(t)
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.eng); err != nil {
+		t.Fatal(err)
+	}
+	f.addCron(t, &cron.Entry{Name: "nightly-backup", Schedule: "0 3 * * *", JobName: "db.backup", ScopeAppID: "app-platform", Enabled: true})
+	for name, tc := range map[string]struct {
+		cfg  map[string]any
+		want []string
+	}{
+		"scope app":  {cfg: nil, want: []string{"nightly-backup"}},
+		"config app": {cfg: map[string]any{"app_id": "app-elsewhere"}, want: []string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got *Adapter
+			h := adapter.Host{Witness: newWitness(t), Container: c, Config: tc.cfg, Scope: adapter.Scope{AppID: "app-platform"}}
+			got, found, err := fromHost(h)
+			if !found || err != nil {
+				t.Fatalf("fromHost = %v, %v", found, err)
+			}
+			got.now = func() time.Time { return now }
+			if ids := ids(run(t, got, KeyScheduledJobs)); !slices.Equal(ids, tc.want) {
+				t.Fatalf("scheduled ids = %v, want %v", ids, tc.want)
+			}
+		})
+	}
+}
+
+// all_tenants in the adapter's own config takes it past staff, so attach
+// tells the host. staff_orgs names the platform's own orgs and doesn't.
+func TestAttachReportsWidening(t *testing.T) {
+	for name, tc := range map[string]struct {
+		cfg   map[string]any
+		scope adapter.Scope
+		want  []string
+	}{
+		"default":            {want: nil},
+		"staff orgs":         {cfg: map[string]any{"staff_orgs": []any{staffOrg}}, want: nil},
+		"all tenants":        {cfg: map[string]any{"all_tenants": true}, want: []string{"all_tenants"}},
+		"global all tenants": {scope: adapter.Scope{AllTenants: true}, want: nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t)
+			c := vessel.New()
+			if err := vessel.ProvideValue(c, f.eng); err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			w := newWitness(t)
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: w, Container: c, Config: tc.cfg, Scope: tc.scope,
+				Widen: func(reason string) { got = append(got, reason) },
+			})
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v", found, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("widened = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWidenedDescriptions(t *testing.T) {
+	f := newFixture(t)
+	staff := collectorsOf(t, f.adapter(WithBackupJobs("db.backup")))
+	wide := collectorsOf(t, f.adapter(WithBackupJobs("db.backup"), WithAllTenants()))
+	for _, k := range []string{KeyScheduledJobs, KeyJobRuns, KeyBackupRuns} {
+		if strings.Contains(staff.pops[k].Description, "every org") {
+			t.Errorf("%s staff description = %q", k, staff.pops[k].Description)
+		}
+		if !strings.Contains(wide.pops[k].Description, "every org") {
+			t.Errorf("%s widened description = %q", k, wide.pops[k].Description)
+		}
+	}
 }
 
 func TestPages(t *testing.T) {

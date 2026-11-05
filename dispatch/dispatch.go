@@ -69,6 +69,10 @@ type Options struct {
 	// collector isn't registered, because dispatch can't tell a backup job
 	// from any other.
 	BackupJobs []string `json:"backup_jobs"`
+	// AppID is the platform's own app. A cron entry or job counts as staff
+	// only when its app scope is empty or this app. In a Forge app it
+	// defaults to the witness scope's AppID.
+	AppID string `json:"app_id"`
 	// StaffOrgs are org IDs whose cron entries and jobs count as staff, on
 	// top of the ones with no org at all. Usually empty.
 	StaffOrgs []string `json:"staff_orgs"`
@@ -94,6 +98,10 @@ type Option func(*Options)
 func WithBackupJobs(names ...string) Option {
 	return func(o *Options) { o.BackupJobs = append(o.BackupJobs, names...) }
 }
+
+// WithAppID sets the platform's own app. Cron entries and jobs scoped to
+// another app aren't staff.
+func WithAppID(appID string) Option { return func(o *Options) { o.AppID = appID } }
 
 // WithStaffOrgs adds org IDs whose entries and jobs count as staff.
 func WithStaffOrgs(orgIDs ...string) Option {
@@ -127,6 +135,7 @@ type Adapter struct {
 	crons    cronLister
 	jobs     job.Lister
 	o        Options
+	appID    string
 	staffOrg map[string]bool
 	backups  []string // trimmed, deduplicated backup names
 	now      func() time.Time
@@ -142,7 +151,7 @@ func New(eng *engine.Engine, opts ...Option) *Adapter {
 }
 
 func newAdapter(eng *engine.Engine, o Options) *Adapter {
-	a := &Adapter{o: o, staffOrg: map[string]bool{}, now: time.Now}
+	a := &Adapter{o: o, appID: strings.TrimSpace(o.AppID), staffOrg: map[string]bool{}, now: time.Now}
 	if eng != nil {
 		if cs := eng.CronStore(); cs != nil {
 			a.crons = cs
@@ -201,7 +210,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.EventProof, erro
 		{
 			Key:         KeyScheduledJobs,
 			Title:       "Scheduled jobs",
-			Description: "Every cron schedule the system runs, with its schedule, the job it starts and whether it is enabled.",
+			Description: "Every cron schedule the system runs, with its schedule, the job it starts and whether it is enabled." + a.widened(),
 			Source:      "cron-entries",
 			Every:       time.Hour,
 			Collect:     a.collectScheduled,
@@ -209,7 +218,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.EventProof, erro
 		{
 			Key:         KeyJobRuns,
 			Title:       "Scheduled job results",
-			Description: "For each scheduled job, when it last fired, last succeeded and last failed, and how many runs succeeded or failed in the last 24 hours.",
+			Description: "For each scheduled job, when it last fired, last succeeded and last failed, and how many runs succeeded or failed in the last 24 hours." + a.widened(),
 			Source:      "cron-job-runs",
 			Every:       time.Hour,
 			Collect:     a.collectRuns,
@@ -219,7 +228,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.EventProof, erro
 		pops = append(pops, collect.Population{
 			Key:         KeyBackupRuns,
 			Title:       "Backup job results",
-			Description: "When each backup job last succeeded and how often it is scheduled to run.",
+			Description: "When each backup job last succeeded and how often it is scheduled to run." + a.widened(),
 			Source:      "backup-job-runs",
 			Tests:       []string{"backup-recent"},
 			Every:       time.Hour,
@@ -244,6 +253,15 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.EventProof, erro
 	return pops, proofs, nil
 }
 
+// widened is the scope rule added to a collector's description when the
+// scope reaches past staff, or "" when it doesn't.
+func (a *Adapter) widened() string {
+	if !a.o.AllTenants {
+		return ""
+	}
+	return " Widened to every org and app, customers' included; each org's or app's runs get an item of their own."
+}
+
 func init() {
 	adapter.Register(adapter.Adapter{
 		Name:   Name,
@@ -256,20 +274,10 @@ func init() {
 // attach finds *engine.Engine in the host's container and registers the
 // collectors.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*engine.Engine](c) {
-		return false, nil
+	a, found, err := fromHost(h)
+	if !found || err != nil {
+		return found, err
 	}
-	var o Options
-	if err := adapter.Decode(h.Config, &o); err != nil {
-		return true, err
-	}
-	eng, err := vessel.Inject[*engine.Engine](c)
-	if err != nil {
-		return true, fmt.Errorf("witness/dispatch: resolve the engine: %w", err)
-	}
-	o.AllTenants = o.AllTenants || h.Scope.AllTenants
-	a := newAdapter(eng, o)
 	if len(a.backups) == 0 {
 		log := h.Logger
 		if log == nil {
@@ -278,4 +286,31 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		log.Info("witness: dispatch found, but no backup_jobs are set, so dispatch.backup-runs is off")
 	}
 	return true, a.Register(h.Witness)
+}
+
+// fromHost builds the adapter for the engine in h's container, and tells
+// the host when the adapter's own all_tenants takes it past staff.
+func fromHost(h adapter.Host) (*Adapter, bool, error) {
+	c, ok := h.Container.(vessel.Vessel)
+	if !ok || c == nil || !vessel.HasType[*engine.Engine](c) {
+		return nil, false, nil
+	}
+	var o Options
+	if err := adapter.Decode(h.Config, &o); err != nil {
+		return nil, true, err
+	}
+	eng, err := vessel.Inject[*engine.Engine](c)
+	if err != nil {
+		return nil, true, fmt.Errorf("witness/dispatch: resolve the engine: %w", err)
+	}
+	if o.AllTenants {
+		// The adapter's own config takes it past staff. The host already
+		// knows about the witness scope's AllTenants.
+		h.Widened("all_tenants")
+	}
+	o.AllTenants = o.AllTenants || h.Scope.AllTenants
+	if strings.TrimSpace(o.AppID) == "" {
+		o.AppID = h.Scope.AppID
+	}
+	return newAdapter(eng, o), true, nil
 }

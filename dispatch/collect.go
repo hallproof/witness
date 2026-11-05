@@ -56,12 +56,31 @@ func expectedEvery(schedule string) (int64, bool) {
 	return int64(gap / time.Second), true
 }
 
-// staff reports whether an org ID is in the staff scope: no org at all, or
-// one of StaffOrgs.
-func (a *Adapter) staff(org string) bool { return org == "" || a.staffOrg[org] }
+// staff reports whether a row's app and org scope is staff: no app or the
+// platform's own app (AppID), and no org or one of StaffOrgs. Authsome
+// gives a session with no org an app-only scope, and a background worker
+// can enqueue a customer's job with no org at all, so an empty org alone
+// isn't enough.
+func (a *Adapter) staff(app, org string) bool {
+	return (app == "" || app == a.appID) && (org == "" || a.staffOrg[org])
+}
 
-// inScope reports whether rows of an org are collected.
-func (a *Adapter) inScope(org string) bool { return a.o.AllTenants || a.staff(org) }
+// inScope reports whether rows of an app and org are collected.
+func (a *Adapter) inScope(app, org string) bool { return a.o.AllTenants || a.staff(app, org) }
+
+// group is the key a row's runs are counted under: the org for staff rows
+// ("" for no org) and for customer orgs, and "app:<app ID>" (plus "/<org>"
+// when there is one) for another app's rows that have no org of their own
+// or reuse a staff org, so they never land in a staff item.
+func (a *Adapter) group(app, org string) string {
+	if a.staff(app, org) || (org != "" && !a.staffOrg[org]) {
+		return org
+	}
+	if org == "" {
+		return "app:" + app
+	}
+	return "app:" + app + "/" + org
+}
 
 func entryName(e *cron.Entry) string {
 	if e.Name != "" {
@@ -79,7 +98,7 @@ func (a *Adapter) entries(ctx context.Context) ([]*cron.Entry, error) {
 	}
 	out := make([]*cron.Entry, 0, len(all))
 	for _, e := range all {
-		if e != nil && a.inScope(e.ScopeOrgID) {
+		if e != nil && a.inScope(e.ScopeAppID, e.ScopeOrgID) {
 			out = append(out, e)
 		}
 	}
@@ -150,7 +169,7 @@ func (a *Adapter) collectBackups(ctx context.Context) ([]map[string]any, error) 
 }
 
 // runItems builds one item per entry and per loose job name, plus one per
-// other org that ran the job when the scope is wider than staff. It reads
+// other org or app that ran the job when the scope is wider than staff. It reads
 // each job name once.
 func (a *Adapter) runItems(ctx context.Context, entries []*cron.Entry, loose []string) ([]map[string]any, error) {
 	scans := map[string]*scanResult{}
@@ -198,26 +217,27 @@ func (a *Adapter) runItems(ctx context.Context, entries []*cron.Entry, loose []s
 	return out, nil
 }
 
-// runStats are one org's finished runs of one job name.
+// runStats are one group's finished runs of one job name.
 type runStats struct {
+	org            string
 	okAt, failAt   time.Time
 	okID, failID   string
 	ok24, fail24   int
 	okSeen, failed bool
 }
 
-// scanResult is what one scan of a job name found, by the org that
-// enqueued each job.
+// scanResult is what one scan of a job name found, by the group (see
+// group) of the scope that enqueued each job.
 type scanResult struct {
-	byOrg     map[string]*runStats
+	byGroup   map[string]*runStats
 	truncated bool
 }
 
-func (r *scanResult) org(org string) *runStats {
-	s, ok := r.byOrg[org]
+func (r *scanResult) group(key, org string) *runStats {
+	s, ok := r.byGroup[key]
 	if !ok {
-		s = &runStats{}
-		r.byOrg[org] = s
+		s = &runStats{org: org}
+		r.byGroup[key] = s
 	}
 	return s
 }
@@ -252,34 +272,34 @@ func (s *runStats) add(j *job.Job, windowStart time.Time) {
 	}
 }
 
-// items turns a scan into run summaries: one for the staff runs, under id,
-// and one per other org, under id@org. e is the cron entry, nil for a
-// backup name with no entry.
+// items turns a scan into run summaries: one for the unscoped staff runs,
+// under id, and one per other group, under id@group. e is the cron entry,
+// nil for a backup name with no entry.
 func (r *scanResult) items(id, jobName string, e *cron.Entry) []map[string]any {
-	orgs := make([]string, 0, len(r.byOrg)+1)
-	orgs = append(orgs, "")
-	for org := range r.byOrg {
-		if org != "" {
-			orgs = append(orgs, org)
+	keys := make([]string, 0, len(r.byGroup)+1)
+	keys = append(keys, "")
+	for k := range r.byGroup {
+		if k != "" {
+			keys = append(keys, k)
 		}
 	}
-	sort.Strings(orgs[1:])
-	out := make([]map[string]any, 0, len(orgs))
-	for _, org := range orgs {
-		s := r.byOrg[org]
+	sort.Strings(keys[1:])
+	out := make([]map[string]any, 0, len(keys))
+	for _, key := range keys {
+		s := r.byGroup[key]
 		if s == nil {
 			s = &runStats{}
 		}
 		it := map[string]any{
 			"id":               id,
 			"job_name":         jobName,
-			"scope_org_id":     org,
+			"scope_org_id":     s.org,
 			"succeeded_24h":    s.ok24,
 			"failed_24h":       s.fail24,
 			"window_truncated": r.truncated,
 		}
-		if org != "" {
-			it["id"] = id + "@" + org
+		if key != "" {
+			it["id"] = id + "@" + key
 		}
 		if e != nil {
 			it["schedule"] = e.Schedule
@@ -307,7 +327,7 @@ func (r *scanResult) items(id, jobName string, e *cron.Entry) []map[string]any {
 // scan reads the finished runs of one job name, succeeded and failed
 // separately, so a job that rarely fails doesn't hide its last success.
 func (a *Adapter) scan(ctx context.Context, name string) (*scanResult, error) {
-	r := &scanResult{byOrg: map[string]*runStats{}}
+	r := &scanResult{byGroup: map[string]*runStats{}}
 	windowStart := a.now().Add(-Window)
 	for _, st := range []job.State{job.StateCompleted, job.StateFailed} {
 		truncated, err := a.scanState(ctx, name, st, windowStart, r)
@@ -352,11 +372,11 @@ func (a *Adapter) scanState(ctx context.Context, name string, state job.State, w
 			// NamePrefix matches "backup.verify" for "backup", and dispatch
 			// treats an empty org filter as every org, so both are checked
 			// here.
-			if j.Name != name || j.State != state || !a.inScope(j.ScopeOrgID) {
+			if j.Name != name || j.State != state || !a.inScope(j.ScopeAppID, j.ScopeOrgID) {
 				continue
 			}
-			r.org(j.ScopeOrgID).add(j, windowStart)
-			found = found || a.staff(j.ScopeOrgID)
+			r.group(a.group(j.ScopeAppID, j.ScopeOrgID), j.ScopeOrgID).add(j, windowStart)
+			found = found || a.staff(j.ScopeAppID, j.ScopeOrgID)
 		}
 		if page.NextCursor == "" || (past && found) {
 			return false, nil

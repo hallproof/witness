@@ -46,18 +46,33 @@
 //
 // # Scope
 //
-// By default you get staff evidence only: cron entries and jobs with no org
-// scope, plus any org you name in StaffOrgs (config staff_orgs). Dispatch's
-// own cron scheduler enqueues jobs with no scope, and RegisterCron never
-// sets one, so this covers the schedules your app registers. Dispatch reads
-// an empty org filter as "every org", so the adapter can't ask the store
-// for unscoped jobs. It reads them all and drops the customer rows itself.
+// By default you get staff evidence only. A cron entry or job is staff when
+// its app scope is empty or your platform's own app (config app_id, which
+// defaults to the witness scope's AppID), and its org scope is empty or an
+// org you name in StaffOrgs (config staff_orgs). Both have to hold.
+// Authsome gives a session with no org an app-only scope, so a job a
+// customer app enqueues can have no org and still not be yours; checking
+// the app keeps it out. Dispatch's own cron scheduler enqueues jobs with no
+// scope, and RegisterCron never sets one, so this covers the schedules your
+// app registers. Dispatch reads an empty org filter as "every org", so the
+// adapter can't ask the store for unscoped jobs. It reads them all and
+// drops the rows that aren't staff itself.
+//
+// One case it can't tell apart: a background worker that fans out one job
+// per customer, with no scope on the job and the customer only in the
+// payload. Those jobs count as staff, and a customer's run of that job name
+// counts toward the staff item. So list in backup_jobs only jobs the
+// platform runs for itself, like a database backup, never a per-customer
+// export that shares a name across customers.
 //
 // AllTenants (config all_tenants, or the witness scope's AllTenants) adds
-// every org's cron entries and jobs. Runs are never mixed across orgs: a
-// customer's runs of a job get their own item, id "<cron name>@<org ID>",
-// so a customer's success can't stand in for yours. Even then only counts,
-// times and IDs go, never payloads or errors.
+// every org's and app's cron entries and jobs, and the collectors'
+// descriptions say so. A customer org's runs of a job get their own item,
+// id "<cron name>@<org ID>", and another app's runs with no org get
+// "<cron name>@app:<app ID>", so they're kept apart from the staff item.
+// Even then only counts, times and IDs go, never payloads or errors. When
+// all_tenants comes from the adapter's own config, the adapter tells the
+// witness host that it widened its scope, so Hallproof can show it.
 //
 // A scope with more than push.MaxItems items fails the run with
 // ErrTooMany, and the heartbeat reports the collector unhealthy.
@@ -67,14 +82,17 @@
 // In a Forge app these come from extensions.witness.adapters.dispatch:
 //
 //	backup_jobs: [db.backup]   # job or cron entry names; empty turns backup-runs off
+//	app_id: ""                 # your platform's app; defaults to the witness scope's AppID
 //	staff_orgs: []             # orgs that count as staff, on top of no org
 //	all_tenants: false
 //	scan_budget: 5000          # job rows read per job name and outcome per run
 //	event_proofs: false
 //	proof_actions: []          # defaults to DefaultProofActions
 //
-// Outside Forge the same settings are Options: WithBackupJobs,
+// Outside Forge the same settings are Options: WithBackupJobs, WithAppID,
 // WithStaffOrgs, WithAllTenants, WithScanBudget and WithEventProofs.
+// Outside Forge there's no witness scope to default from, so without
+// WithAppID only rows with no app scope count as staff.
 //
 // The scan budget is there because finding a job's runs is expensive (see
 // the gaps below). For each job name the adapter reads completed jobs, then
