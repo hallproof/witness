@@ -3,6 +3,7 @@ package warden
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/xraph/vessel"
+	xwarden "github.com/xraph/warden"
 	"github.com/xraph/warden/assignment"
 	"github.com/xraph/warden/policy"
 	"github.com/xraph/warden/relation"
@@ -553,5 +555,78 @@ func TestNeverSendsContent(t *testing.T) {
 	}
 	if strings.Contains(string(raw), canary) {
 		t.Fatalf("a collector sent content: %s", raw)
+	}
+}
+
+func TestAttachReportsWidening(t *testing.T) {
+	f := newFixture(t)
+	f.seed(t)
+	for name, tc := range map[string]struct {
+		cfg       map[string]any
+		allTenant bool
+		want      []string
+	}{
+		"default":                   {nil, false, nil},
+		"host scope all tenants":    {nil, true, nil},
+		"all tenants":               {map[string]any{"all_tenants": true}, false, []string{"all_tenants"}},
+		"empty exclude list":        {map[string]any{"exclude_role_slugs": []any{}}, false, []string{"exclude_role_slugs"}},
+		"exclude list without user": {map[string]any{"exclude_role_slugs": []any{"platform-admin"}}, false, []string{"exclude_role_slugs"}},
+		"exclude list with user":    {map[string]any{"exclude_role_slugs": []any{"platform-user", "x"}}, false, nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := vessel.New()
+			if err := vessel.ProvideValue(c, f.eng); err != nil {
+				t.Fatal(err)
+			}
+			h, _ := host(t, c, tc.cfg)
+			h.Scope.AllTenants = tc.allTenant
+			var got []string
+			h.Widen = func(r string) { got = append(got, r) }
+			found, err := attachRegistered(t, h)
+			if !found || err != nil {
+				t.Fatalf("Attach = %v, %v", found, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("Widen got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWidenedDescriptions(t *testing.T) {
+	f := newFixture(t)
+	desc := func(a *Adapter) map[string]string {
+		_, pops, _ := a.collectors()
+		out := map[string]string{}
+		for _, p := range pops {
+			out[p.Key] = p.Description
+		}
+		return out
+	}
+	narrow := desc(New(f.eng, WithTenants(staffTenant), WithRelations(0)))
+	wide := desc(New(f.eng, WithAllTenants(), WithRelations(0)))
+	for _, k := range []string{"warden.roles", "warden.assignments", "warden.policies", "warden.relations"} {
+		if !strings.Contains(wide[k], "every tenant, customers' included") {
+			t.Errorf("%s with all_tenants: %q", k, wide[k])
+		}
+		if strings.Contains(narrow[k], "customers") {
+			t.Errorf("%s by default: %q", k, narrow[k])
+		}
+	}
+	kept := desc(New(f.eng, WithTenants(staffTenant), WithExcludeRoleSlugs()))["warden.assignments"]
+	if !strings.Contains(kept, "exclude_role_slugs") || !strings.Contains(kept, "platform-user") {
+		t.Errorf("assignments with an empty exclude list: %q", kept)
+	}
+}
+
+func TestAttachReportsAnEngineThatWontResolve(t *testing.T) {
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*xwarden.Engine, error) { return nil, errors.New("boom") }); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := host(t, c, nil)
+	found, err := attachRegistered(t, h)
+	if !found || err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("Attach = %v, %v; want true and the resolve error", found, err)
 	}
 }

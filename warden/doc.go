@@ -80,7 +80,15 @@
 // platform-admin unless you say otherwise) are marked privileged.
 //
 // With no tenants and no app ID in the scope, the adapter registers
-// nothing and logs why.
+// nothing and logs why. If the container has an engine that won't
+// resolve, attaching fails, so coverage shows the adapter with an error.
+//
+// Two of the options below take the adapter beyond staff: all_tenants, and
+// an exclude_role_slugs list that leaves platform-user in. When you set
+// either, the adapter tells the witness it collects beyond staff, so
+// Hallproof shows it, and the affected collectors say so in their
+// descriptions. The scope's all_tenants is the host's own setting, and
+// the host reports it.
 //
 // # Options
 //
@@ -93,7 +101,7 @@
 //     Warden has no way to list tenants.
 //   - exclude_role_slugs: roles whose assignments are dropped. Unset means
 //     platform-user in staff scope and nothing with all_tenants. An empty
-//     list drops nothing.
+//     list drops nothing, so every customer's platform-user row comes back.
 //   - privileged: role slugs marked privileged. Empty means the scope's
 //     staff roles.
 //   - relations: turn on warden.relations.

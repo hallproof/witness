@@ -3,8 +3,11 @@ package warden
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/xraph/vessel"
@@ -160,6 +163,39 @@ func (a *Adapter) Register(w *witness.Witness) error {
 	return nil
 }
 
+// where says, in a collector description, which tenants it reads.
+func (a *Adapter) where() string {
+	if a.opts.AllTenants {
+		return "every tenant, customers' included"
+	}
+	return "the staff tenants"
+}
+
+// keptDefaults are the default exclusions an explicit exclude_role_slugs
+// leaves in. In staff scope those assignments belong to customers too.
+func (a *Adapter) keptDefaults() []string {
+	if a.opts.AllTenants {
+		return nil
+	}
+	var kept []string
+	for _, slug := range DefaultExcludeRoleSlugs {
+		if !slices.Contains(a.opts.ExcludeRoleSlugs, slug) {
+			kept = append(kept, slug)
+		}
+	}
+	return kept
+}
+
+// keptNote tells Hallproof, in the assignments description, when the
+// exclude list keeps a role every customer holds.
+func (a *Adapter) keptNote() string {
+	kept := a.keptDefaults()
+	if len(kept) == 0 {
+		return ""
+	}
+	return " exclude_role_slugs keeps " + strings.Join(kept, " and ") + ", so customers holding it are listed too."
+}
+
 // collectors returns every collector the options turn on.
 func (a *Adapter) collectors() (snaps []collect.Snapshot, pops []collect.Population, proofs []collect.EventProof) {
 	if len(a.opts.Tenants) > 0 {
@@ -175,7 +211,7 @@ func (a *Adapter) collectors() (snaps []collect.Snapshot, pops []collect.Populat
 		collect.Population{
 			Key:         "warden.roles",
 			Title:       "Roles",
-			Description: "Every role in the staff tenants, the permissions it grants and the role it inherits from.",
+			Description: "Every role in " + a.where() + ", the permissions it grants and the role it inherits from.",
 			Source:      "roles",
 			Tests:       []string{"privileged-reviewed", "review-signed-off"},
 			Every:       15 * time.Minute,
@@ -184,7 +220,7 @@ func (a *Adapter) collectors() (snaps []collect.Snapshot, pops []collect.Populat
 		collect.Population{
 			Key:         "warden.assignments",
 			Title:       "Role assignments",
-			Description: "Who holds which role in the staff tenants, since when, and until when.",
+			Description: "Who holds which role in " + a.where() + ", since when, and until when." + a.keptNote(),
 			Source:      "role-assignments",
 			Tests:       []string{"privileged-reviewed", "review-signed-off", "no-active-leavers"},
 			Every:       15 * time.Minute,
@@ -193,7 +229,7 @@ func (a *Adapter) collectors() (snaps []collect.Snapshot, pops []collect.Populat
 		collect.Population{
 			Key:         "warden.policies",
 			Title:       "Access policies",
-			Description: "Every allow or deny policy in the staff tenants, whether it is active, and what it matches.",
+			Description: "Every allow or deny policy in " + a.where() + ", whether it is active, and what it matches.",
 			Source:      "access-policies",
 			Every:       15 * time.Minute,
 			Collect:     a.collectPolicies,
@@ -203,7 +239,7 @@ func (a *Adapter) collectors() (snaps []collect.Snapshot, pops []collect.Populat
 		pops = append(pops, collect.Population{
 			Key:         "warden.relations",
 			Title:       "Relationship tuples",
-			Description: "Every relationship tuple in the staff tenants, the ReBAC side of who can reach what.",
+			Description: "Every relationship tuple in " + a.where() + ", the ReBAC side of who can reach what.",
 			Source:      "relations",
 			Tests:       []string{"review-signed-off"},
 			Every:       time.Hour,
@@ -242,7 +278,10 @@ func init() {
 // attach finds the engine, from the config's ConfigEngine key or the
 // container, and registers the collectors the scope allows.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	eng := engine(h)
+	eng, err := engine(h)
+	if err != nil {
+		return true, err
+	}
 	if eng == nil {
 		return false, nil
 	}
@@ -252,29 +291,41 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if err := adapter.Decode(cfg, &o); err != nil {
 		return true, err
 	}
+	own := o.AllTenants
 	o, ok := options(h, o)
 	if !ok {
 		logger(h).Info("witness/warden: no staff tenant to collect; set adapters.warden.tenants, or a scope app ID")
 		return true, nil
 	}
-	return true, New(eng, WithOptions(o)).Register(h.Witness)
+	a := New(eng, WithOptions(o))
+	if err := a.Register(h.Witness); err != nil {
+		return true, err
+	}
+	// The host reports its own all-tenants scope; these are the adapter's.
+	if own {
+		h.Widened("all_tenants")
+	}
+	if len(a.keptDefaults()) > 0 {
+		h.Widened("exclude_role_slugs")
+	}
+	return true, nil
 }
 
-// engine returns the host's Warden engine, or nil.
-func engine(h adapter.Host) *warden.Engine {
+// engine returns the host's Warden engine, or nil when it has none. It
+// fails when the container has one that won't resolve.
+func engine(h adapter.Host) (*warden.Engine, error) {
 	if eng, ok := h.Config[ConfigEngine].(*warden.Engine); ok && eng != nil {
-		return eng
+		return eng, nil
 	}
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil || !vessel.HasType[*warden.Engine](c) {
-		return nil
+		return nil, nil
 	}
 	eng, err := vessel.Inject[*warden.Engine](c)
 	if err != nil {
-		logger(h).Warn("witness/warden: the container has a warden engine but it didn't resolve", "error", err)
-		return nil
+		return nil, fmt.Errorf("witness/warden: resolve the engine: %w", err)
 	}
-	return eng
+	return eng, nil
 }
 
 // options fills o's gaps from the host's scope. ok is false when there is
