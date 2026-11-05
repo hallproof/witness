@@ -69,11 +69,16 @@ func (e *Extension) discoverAndStart(ctx context.Context, container forge.Contai
 		entry := map[string]any{"name": a.Name, "module": a.Module, "found": false}
 		results[a.Name] = entry
 		alog := log.With("adapter", a.Name)
+		// An adapter the config leaves out is never attached, and its entry
+		// says so, so Hallproof can tell it from a library the app doesn't
+		// run.
 		switch {
 		case len(only) > 0 && !only[a.Name]:
+			entry["excluded"] = true
 			alog.Info("witness: skipped an adapter that libraries leaves out")
 			continue
 		case exclude[a.Name]:
+			entry["excluded"] = true
 			alog.Info("witness: skipped an excluded adapter")
 			continue
 		}
@@ -125,7 +130,7 @@ func (e *Extension) discoverAndStart(ctx context.Context, container forge.Contai
 	if err := w.Snapshot(collect.Snapshot{
 		Key:         CoverageKey,
 		Title:       "Witness coverage",
-		Description: "The libraries witness looks for in this app, which it found, and whose evidence it collects. An adapter whose own config collects beyond staff is marked widened, with the config keys that did it.",
+		Description: "The libraries witness looks for in this app, which it found, and whose evidence it collects. An adapter the config leaves out is marked excluded, and one whose own config collects beyond staff is marked widened, with the config keys that did it.",
 		Every:       e.coverageEvery,
 		Collect:     func(context.Context) (map[string]any, error) { return settings, nil },
 	}); err != nil {

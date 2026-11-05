@@ -60,7 +60,10 @@
 // Next to the adapters' evidence, witness pushes one snapshot, witness.coverage.
 // It lists every registered adapter by name and module, whether witness found
 // its library, and error: true when its Attach failed. It never carries the
-// error's text; that stays in your logs. The snapshot also says the scope,
+// error's text; that stays in your logs. An adapter your config leaves out,
+// through libraries or exclude, is never attached and gets excluded: true
+// (and found: false), so Hallproof can tell it from a library your app
+// doesn't run. The snapshot also says the scope,
 // staff or all_tenants. This is how Hallproof can tell you "this app runs
 // Trove, and no Trove evidence is arriving".
 //

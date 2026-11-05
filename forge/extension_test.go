@@ -446,6 +446,7 @@ type coverageAdapter struct {
 	Module    string   `json:"module"`
 	Found     bool     `json:"found"`
 	Error     *bool    `json:"error"`
+	Excluded  *bool    `json:"excluded"`
 	Widened   *bool    `json:"widened"`
 	WidenedBy []string `json:"widened_by"`
 }
@@ -490,7 +491,11 @@ func TestCoverageSnapshot(t *testing.T) {
 	broken := fake("cov-broken", false, func(string) func(context.Context, adapter.Host) (bool, error) {
 		return func(context.Context, adapter.Host) (bool, error) { return false, errors.New(canary) }
 	})
-	excluded := fake("cov-excluded", false, snapshotter(time.Hour, nil, nil))
+	var (
+		mu       sync.Mutex
+		attached []string
+	)
+	excluded := fake("cov-excluded", false, snapshotter(time.Hour, &attached, &mu))
 
 	cfg := on(s, found, absent, broken, excluded)
 	cfg.Exclude = []string{excluded}
@@ -510,8 +515,8 @@ func TestCoverageSnapshot(t *testing.T) {
 	if cov.AnyWidened != nil {
 		t.Fatalf("any_widened is %v; no adapter widened, so it should be left out", *cov.AnyWidened)
 	}
-	want := map[string]struct{ found, err bool }{
-		found: {true, false}, absent: {false, false}, broken: {false, true}, excluded: {false, false},
+	want := map[string]struct{ found, err, excluded bool }{
+		found: {true, false, false}, absent: {false, false, false}, broken: {false, true, false}, excluded: {false, false, true},
 	}
 	// Every registered adapter is listed, including other tests' fakes
 	// that this app's Libraries leave out, in name order.
@@ -527,7 +532,17 @@ func TestCoverageSnapshot(t *testing.T) {
 	for _, a := range cov.Adapters {
 		w, ok := want[a.Name]
 		if !ok {
+			// Libraries leaves every other adapter out.
+			if a.Found || a.Excluded == nil || !*a.Excluded {
+				t.Fatalf("%s: found %v, excluded %v; Libraries leaves it out, so want found false, excluded true", a.Name, a.Found, a.Excluded)
+			}
 			continue
+		}
+		if w.excluded != (a.Excluded != nil && *a.Excluded) {
+			t.Fatalf("%s: excluded %v, want %v", a.Name, a.Excluded, w.excluded)
+		}
+		if a.Excluded != nil && !*a.Excluded {
+			t.Fatalf("%s: excluded is false; it should be left out", a.Name)
 		}
 		seen++
 		if a.Module != "example.com/"+a.Name || a.Found != w.found {
@@ -545,6 +560,11 @@ func TestCoverageSnapshot(t *testing.T) {
 	}
 	if seen != len(want) {
 		t.Fatalf("coverage lists %d of this test's %d adapters", seen, len(want))
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(attached) != 0 {
+		t.Fatalf("an excluded adapter was attached: %v", attached)
 	}
 }
 
