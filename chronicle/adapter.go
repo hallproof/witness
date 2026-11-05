@@ -131,9 +131,12 @@ func find(container any) *xchronicle.Chronicle {
 }
 
 // Register adds the chain's own collectors to w: the platform stream's
-// snapshot. Call it before w.Start.
+// snapshot. Call it before w.Start. It adds them all or none, like the
+// library adapters.
 func (c *Chain) Register(w *witness.Witness) error {
-	return w.Snapshot(c.PlatformSnapshot())
+	var set adapter.Set
+	set.Snapshot(c.PlatformSnapshot())
+	return set.Register(w)
 }
 
 // PlatformSnapshot is a snapshot of the platform stream's posture: its ID
