@@ -196,27 +196,18 @@ func newAdapter(eng *engine.Engine, o Options) *Adapter {
 
 // Register adds the adapter's collectors to w. It returns ErrNoOrg, and
 // adds nothing, when no org or scope is set.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	pops, snaps, proofs, err := a.collectors()
 	if err != nil {
 		return err
 	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, s := range snaps {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	for _, e := range proofs {
-		if err := w.EventProof(e); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Population(pops...)
+	set.Snapshot(snaps...)
+	set.EventProof(proofs...)
+	return set.Register(w)
 }
 
 func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []collect.EventProof, error) {
