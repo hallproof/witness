@@ -32,6 +32,19 @@ jobs:
       # The upload is skipped when the org has no token.
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
+  # The release script's own test: the tag list and the go.mod check
+  # release-tags.sh runs before it tags.
+  release-script:
+    name: Release script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: false
+      - run: scripts/release-tags_test.sh
+
   modules:
     name: List nested modules
     runs-on: ubuntu-latest

@@ -4,8 +4,10 @@
 # in all of them.
 MODULES := . $(shell scripts/modules.sh)
 
+# test also runs the release script's own test (scripts/release-tags_test.sh).
 test:
 	@set -e; for m in $(MODULES); do echo "==> $$m"; (cd $$m && go test -race ./...); done
+	@scripts/release-tags_test.sh
 
 vet:
 	@set -e; for m in $(MODULES); do (cd $$m && go vet ./...); done
