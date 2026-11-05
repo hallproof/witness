@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -228,8 +229,9 @@ func TestRejectedAreNotRetried(t *testing.T) {
 	if st := c.Stats(); st.Rejected != 1 || st.Accepted != 1 {
 		t.Fatalf("stats %+v", st)
 	}
-	if n := len(s.Requests()); n != 1 {
-		t.Fatalf("%d requests, want 1", n)
+	sent := sentIDs(s)
+	if n := count(sent, ""); n != 2 || !slices.Contains(sent, "s1") {
+		t.Fatalf("sent %q, want the rejected message and s1 once each", sent)
 	}
 }
 
@@ -257,4 +259,69 @@ func TestEnqueueNeverBlocks(t *testing.T) {
 		t.Fatalf("10 000 enqueues took %v", took)
 	}
 	_ = stop(t, c, 50*time.Millisecond)
+}
+
+// Review, Important #1: a full queue gives up heartbeats before evidence.
+func TestFullQueueDropsHeartbeatsFirst(t *testing.T) {
+	s := ingesttest.New(t)
+	c := newClient(t, s, client.WithQueueSize(3))
+	c.Enqueue(snap("s1", "1"), heartbeat("hb:1"), heartbeat("hb:2"), snap("s2", "2"), snap("s3", "3"))
+	if st := c.Stats(); st.Dropped != 2 || st.Queued != 3 {
+		t.Fatalf("stats %+v", st)
+	}
+	if err := stop(t, c, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(storedIDs(s)); got != "[s1 s2 s3]" {
+		t.Fatalf("stored %s, want [s1 s2 s3]", got)
+	}
+}
+
+// Review, Important #3: the background sender says when it can't get
+// through, once per streak.
+func TestSenderLogsFailureStreak(t *testing.T) {
+	s := ingesttest.New(t)
+	s.FailNext(1000, http.StatusNotFound)
+	logs := &logBuffer{}
+	c := newClient(t, s, client.WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	c.Enqueue(snap("s1", "1"))
+	c.Start()
+	eventually(t, "a few failed attempts", func() bool { return len(s.Requests()) >= 5 })
+	_ = stop(t, c, 50*time.Millisecond)
+	if n := strings.Count(logs.String(), "level=WARN"); n != 1 || !strings.Contains(logs.String(), "404") {
+		t.Fatalf("%d warnings, want 1 naming the 404:\n%s", n, logs)
+	}
+}
+
+// Review, Important #3: a message refused on the background path is logged
+// with its ID and reason, not just counted.
+func TestRejectedAreLogged(t *testing.T) {
+	s := ingesttest.New(t)
+	logs := &logBuffer{}
+	c := newClient(t, s, client.WithLogger(slog.New(slog.NewTextHandler(logs, nil))))
+	c.Enqueue(snap("huge", strings.Repeat("x", 9<<20)))
+	if err := stop(t, c, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "huge") || !strings.Contains(out, "larger than a batch") {
+		t.Fatalf("no warning names the rejected message:\n%s", out)
+	}
+}
+
+// Review, Important #5: a kind Hallproof hasn't confirmed goes out as one
+// message first, so an older Hallproof notes one rejection, not a batch.
+func TestUnknownKindIsProbedWithOneMessage(t *testing.T) {
+	s := ingesttest.New(t) // doesn't know heartbeats
+	c := newClient(t, s)
+	c.Enqueue(heartbeat("hb:1"), heartbeat("hb:2"), heartbeat("hb:3"), heartbeat("hb:4"), heartbeat("hb:5"), snap("s1", "1"))
+	if err := stop(t, c, 5*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if n := count(sentIDs(s), "hb:"); n != 1 {
+		t.Fatalf("%d heartbeats reached the server, want 1", n)
+	}
+	if st := c.Stats(); st.HeldBack != 4 || len(s.Stored()) != 1 {
+		t.Fatalf("stats %+v, stored %d", st, len(s.Stored()))
+	}
 }

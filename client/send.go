@@ -105,6 +105,11 @@ func (c *Client) sendBatch(ctx context.Context, msgs []push.Message, idx []int, 
 	var last error
 	for attempt := 0; attempts <= 0 || attempt < attempts; attempt++ {
 		if attempt > 0 {
+			if attempts <= 0 && attempt == 1 {
+				// The background sender retries without a limit, so say once
+				// per streak that it isn't getting through.
+				c.log.Warn("witness: can't push to hallproof; messages stay queued and retry", "error", last)
+			}
 			if err := c.wait(ctx, attempt, last); err != nil {
 				return err
 			}
