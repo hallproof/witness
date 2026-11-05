@@ -181,22 +181,17 @@ func newAdapter(eng *engine.Engine, o Options) *Adapter {
 }
 
 // Register adds the adapter's collectors to w.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	pops, proofs, err := a.collectors()
 	if err != nil {
 		return err
 	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, e := range proofs {
-		if err := w.EventProof(e); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Population(pops...)
+	set.EventProof(proofs...)
+	return set.Register(w)
 }
 
 func (a *Adapter) collectors() ([]collect.Population, []collect.EventProof, error) {
