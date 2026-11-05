@@ -781,3 +781,25 @@ func TestAttachExtensionWithoutDatabase(t *testing.T) {
 		})
 	}
 }
+
+func TestAttachFailingPartWayRegistersNothing(t *testing.T) {
+	db := openSQLite(t, "app.db")
+	standard(t, db)
+	c := vessel.New()
+	provide(t, c, "", db)
+	w := newWitness(t)
+	// The status snapshot is the last collector grove adds; its key is taken.
+	if err := w.Population(collect.Population{Key: KeyStatus, Title: "squatter", Collect: func(context.Context) ([]map[string]any, error) { return nil, nil }}); err != nil {
+		t.Fatal(err)
+	}
+	found, err := attach(context.Background(), adapter.Host{Witness: w, Container: c})
+	if !found || err == nil {
+		t.Fatalf("attach = %v, %v; want true and the duplicate key's error", found, err)
+	}
+	if w.Remove(KeyMigrations) {
+		t.Errorf("%s stayed registered after attach failed", KeyMigrations)
+	}
+	if !w.Remove(KeyStatus) {
+		t.Error("attach removed a collector it didn't add")
+	}
+}
