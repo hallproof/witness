@@ -10,6 +10,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -284,6 +285,115 @@ func TestAttachSkipsMissingEngine(t *testing.T) {
 			found, err := attach(context.Background(), adapter.Host{Witness: newWitness(t), Container: c, Config: map[string]any{"tenants": []any{staff}}})
 			if found || err != nil {
 				t.Fatalf("attach = %v, %v; want false, nil", found, err)
+			}
+		})
+	}
+}
+
+// fakeExt stands in for shield's Forge extension. The adapter only uses
+// its getter, and calls counts how often it was asked.
+type fakeExt struct {
+	eng   *engine.Engine
+	calls atomic.Int32
+}
+
+func (x *fakeExt) Engine() *engine.Engine {
+	x.calls.Add(1)
+	return x.eng
+}
+
+// extensions is a host's extension lookup that runs only x, as "shield".
+func extensions(x *fakeExt) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		if name == "shield" && x != nil {
+			return x, true
+		}
+		return nil, false
+	}
+}
+
+// constructed registers eng with a constructor, the way shield's extension
+// does, and counts how often the container builds it.
+func constructed(t *testing.T, eng *engine.Engine) (vessel.Vessel, *atomic.Int32) {
+	t.Helper()
+	var built atomic.Int32
+	c := vessel.New()
+	must(t, vessel.Provide(c, func() (*engine.Engine, error) {
+		built.Add(1)
+		return eng, nil
+	}))
+	return c, &built
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, built := constructed(t, f.eng)
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{
+		Witness: w, Container: c, Extension: extensions(&fakeExt{eng: f.eng}),
+		Config: map[string]any{"tenants": []any{staff}, "app_id": app},
+	})
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	for _, k := range []string{KeyEngine, KeyProfiles, KeyChecks, KeyPolicies, KeyReports, KeyScanOutcomes} {
+		if !taken(t, w, k) {
+			t.Errorf("%s was not registered", k)
+		}
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the engine %d times, want 0", n)
+	}
+}
+
+// An extension whose getter returns nil hasn't built its engine, so shield
+// counts as absent and the container is never asked instead.
+func TestAttachWithAnEmptyExtensionIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	c, built := constructed(t, f.eng)
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{
+		Witness: w, Container: c, Extension: extensions(&fakeExt{}),
+		Config: map[string]any{"tenants": []any{staff}},
+	})
+	if found || err != nil {
+		t.Fatalf("attach = %v, %v; want false, nil", found, err)
+	}
+	if taken(t, w, KeyEngine) {
+		t.Fatalf("%s was registered with no engine", KeyEngine)
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the engine %d times, want 0", n)
+	}
+}
+
+// With the engine snapshot off and no tenants, app, widening or event
+// proofs there is nothing to collect, so attach must not reach for the
+// engine at all.
+func TestAttachWithNothingToCollectNeverTouchesTheEngine(t *testing.T) {
+	f := newFixture(t)
+	for name, withExt := range map[string]bool{"extension": true, "container only": false} {
+		t.Run(name, func(t *testing.T) {
+			c, built := constructed(t, f.eng)
+			w := newWitness(t)
+			h := adapter.Host{Witness: w, Container: c, Config: map[string]any{"engine_snapshot": false}}
+			var x *fakeExt
+			if withExt {
+				x = &fakeExt{eng: f.eng}
+				h.Extension = extensions(x)
+			}
+			found, err := attach(context.Background(), h)
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v; want true, nil", found, err)
+			}
+			if taken(t, w, KeyEngine) {
+				t.Errorf("%s was registered with engine_snapshot off", KeyEngine)
+			}
+			if n := built.Load(); n != 0 {
+				t.Errorf("the container built the engine %d times, want 0", n)
+			}
+			if x != nil && x.calls.Load() != 0 {
+				t.Errorf("the extension's getter was called %d times, want 0", x.calls.Load())
 			}
 		})
 	}

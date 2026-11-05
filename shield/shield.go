@@ -303,20 +303,28 @@ func init() {
 	})
 }
 
-// attach finds *engine.Engine in the host's container and registers the
-// collectors. A TenantSource in the container serves AllTenants.
+// extensionName is the name shield's Forge extension registers under.
+const extensionName = "shield"
+
+// engineGetter is the one method of shield's Forge extension the adapter
+// uses. A structural interface keeps the extension module out of the
+// adapter's dependencies.
+type engineGetter interface{ Engine() *engine.Engine }
+
+// attach registers the collectors. A TenantSource in the container serves
+// AllTenants. It decides from config first whether there is anything to
+// collect, and only then reads the engine: through shield's extension when
+// the app runs it, and from the container otherwise.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*engine.Engine](c) {
+	ext, hasExt := h.Ext(extensionName)
+	c, isVessel := h.Container.(vessel.Vessel)
+	inContainer := isVessel && c != nil && vessel.HasType[*engine.Engine](c)
+	if !hasExt && !inContainer {
 		return false, nil
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return true, err
-	}
-	eng, err := vessel.Inject[*engine.Engine](c)
-	if err != nil {
-		return true, fmt.Errorf("witness/shield: resolve the engine: %w", err)
 	}
 	log := h.Logger
 	if log == nil {
@@ -324,7 +332,7 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	}
 	own := o.AllTenants
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
-	if o.AllTenants && vessel.HasType[TenantSource](c) {
+	if o.AllTenants && c != nil && vessel.HasType[TenantSource](c) {
 		src, err := vessel.Inject[TenantSource](c)
 		if err != nil {
 			return true, fmt.Errorf("witness/shield: resolve the tenant source: %w", err)
@@ -334,6 +342,29 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if o.AllTenants && o.TenantSource == nil {
 		log.Warn("witness: shield can't list its tenants and no shield.TenantSource is in the container, so the scope is not widened")
 		o.AllTenants = false
+	}
+	if nothingToCollect(o) {
+		log.Info("witness: shield found, but engine_snapshot is off and no tenants, app or event proofs are set, so nothing is collected")
+		return true, nil
+	}
+	var eng *engine.Engine
+	if hasExt {
+		g, ok := ext.(engineGetter)
+		if !ok {
+			log.Warn("witness: the shield extension has no Engine getter, so shield is skipped", "type", fmt.Sprintf("%T", ext))
+			return false, nil
+		}
+		if eng = g.Engine(); eng == nil {
+			log.Warn("witness: the shield extension has no engine yet, so shield is skipped")
+			return false, nil
+		}
+	} else {
+		// The app doesn't run shield's extension and provided the engine
+		// itself. A finished value is never started again.
+		var err error
+		if eng, err = vessel.Inject[*engine.Engine](c); err != nil {
+			return true, fmt.Errorf("witness/shield: resolve the engine: %w", err)
+		}
 	}
 	// The host reports its own scope. Only this adapter's config is ours to
 	// report, and only when it really widened.
@@ -346,4 +377,12 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		log.Info("witness: no shield tenants are set, so no profiles, checks or scan outcomes are collected")
 	}
 	return true, newAdapter(eng, o).Register(h.Witness)
+}
+
+// nothingToCollect reports whether o, once AllTenants is settled, leaves
+// every collector off whatever the engine holds.
+func nothingToCollect(o Options) bool {
+	snapshot := o.EngineSnapshot == nil || *o.EngineSnapshot
+	return !snapshot && !o.AllTenants && !o.EventProofs &&
+		len(cleanTenants(o.Tenants)) == 0 && strings.TrimSpace(o.AppID) == ""
 }

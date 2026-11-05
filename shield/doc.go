@@ -4,8 +4,7 @@
 // # Using it
 //
 // With Forge, import the package for its side effect and name the tenants
-// to read. The witness extension finds *engine.Engine in the container,
-// which shield's own Forge extension puts there:
+// to read:
 //
 //	import _ "github.com/hallproof/witness/shield"
 //
@@ -13,6 +12,18 @@
 //
 //	app_id: loomplane         # the shield app ID, not your identity app
 //	tenants: [org_...]        # your own company's organization
+//
+// The adapter reads config first. With engine_snapshot off and no tenants,
+// app, widening or event proofs there is nothing to collect, so it logs
+// that and never touches the engine. Otherwise it reads the engine through
+// shield's own Forge extension ("shield", its Engine method), which
+// already built and started it. If that extension is running but has no
+// engine yet, shield counts as not found and the adapter logs why. Only
+// when your app doesn't run shield's extension does the adapter look for
+// *engine.Engine in the container. If you build the engine yourself,
+// provide the finished value with forge.ProvideValue(c, eng), not a
+// constructor: a container starts a value it builds from a constructor,
+// and an engine started twice runs everything twice.
 //
 // Without Forge, build the adapter and register it before you start
 // witness:
