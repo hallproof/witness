@@ -76,6 +76,22 @@ type Host struct {
 	// tenant. Nil means the host doesn't track it; adapters call it through
 	// (Host).Widened, which allows for that.
 	Widen func(reason string)
+	// Extension looks up one of the app's extensions by name, such as
+	// "dispatch". Read a library's engine through its extension's getter
+	// (Engine, Gateway and the like) before asking Container: a container
+	// can start a value the first time it builds it, and an engine its
+	// extension already started must not start twice. Nil means the host
+	// has no extensions; adapters call it through (Host).Ext.
+	Extension func(name string) (any, bool)
+}
+
+// Ext looks up the app's extension called name. It reports false when the
+// host set no Extension or the app doesn't run that extension.
+func (h Host) Ext(name string) (any, bool) {
+	if h.Extension == nil {
+		return nil, false
+	}
+	return h.Extension(name)
 }
 
 // Widened reports that the adapter collects beyond staff. It is safe to call

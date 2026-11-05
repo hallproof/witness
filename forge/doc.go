@@ -88,6 +88,20 @@
 // chain offered after witness starts is ignored with a log line. WithChain
 // sets the chain in code and wins over any adapter.
 //
+// # How adapters find each library
+//
+// An adapter asks for its library's own Forge extension first, by name, and
+// reads the engine through that extension's getter, such as Engine or
+// Gateway. Only when the app doesn't run the library's extension does it look
+// in the container. That order matters: the container builds a value
+// registered with a constructor the first time anyone asks for it, and starts
+// it then if it has a Start method, even when the library's extension already
+// started it. Most Forgery extensions register their engines that way, and an
+// engine started twice runs its workers twice.
+//
+// So if your app builds an engine itself and wants witness to find it,
+// provide the finished value (forge.ProvideValue), not a constructor.
+//
 // # Reaching the witness from your own code
 //
 // The container holds *witness.Witness only once the app has started. Forge's

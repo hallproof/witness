@@ -766,3 +766,42 @@ func TestConfigFromFile(t *testing.T) {
 		t.Fatalf("Host.Config = %v", got.Config)
 	}
 }
+
+// An adapter reads a library's engine through the library's extension, so the
+// container never builds, and so never starts, an engine twice.
+func TestHostFindsExtensions(t *testing.T) {
+	s := ingesttest.New(t)
+	type seen struct {
+		probe   any
+		found   bool
+		missing bool
+	}
+	got := make(chan seen, 1)
+	name := fake("ext", false, func(string) func(context.Context, adapter.Host) (bool, error) {
+		return func(_ context.Context, h adapter.Host) (bool, error) {
+			x, ok := h.Ext("probe")
+			_, missing := h.Ext("no-such-extension")
+			got <- seen{probe: x, found: ok, missing: missing}
+			return false, nil
+		}
+	})
+	var runs atomic.Int64
+	p := &probe{BaseExtension: forge.NewBaseExtension("probe", "1.0.0", "an extension to find"), runs: &runs}
+	ext := witnessforge.New(witnessforge.WithConfig(on(s, name)))
+	app := forgetesting.NewTestAppWithConfig(forge.AppConfig{Name: "witness-test", Extensions: []forge.Extension{ext, p}})
+	if err := app.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = app.Stop(context.Background()) })
+	select {
+	case g := <-got:
+		if !g.found || g.probe != forge.Extension(p) {
+			t.Fatalf("Ext(probe) = %v, %v; want the probe extension", g.probe, g.found)
+		}
+		if g.missing {
+			t.Fatal("Ext found an extension the app doesn't run")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the adapter never attached")
+	}
+}

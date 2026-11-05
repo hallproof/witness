@@ -28,7 +28,7 @@ const (
 // chain adapters first, registers the coverage snapshot and starts witness.
 // It runs once every extension has started, and never fails the app: an
 // adapter that errors or panics is logged and skipped.
-func (e *Extension) discoverAndStart(ctx context.Context, container forge.Container) {
+func (e *Extension) discoverAndStart(ctx context.Context, container forge.Container, extensions func(string) (any, bool)) {
 	e.mu.Lock()
 	w, cfg, log := e.w, e.cfg, e.log
 	e.mu.Unlock()
@@ -86,6 +86,7 @@ func (e *Extension) discoverAndStart(ctx context.Context, container forge.Contai
 			Config:    cfg.Adapters[a.Name],
 			SetChain:  e.setChain(a.Name, alog),
 			Widen:     wd.widen,
+			Extension: extensions,
 		})
 		entry["found"] = found
 		if reasons := wd.close(); len(reasons) > 0 {

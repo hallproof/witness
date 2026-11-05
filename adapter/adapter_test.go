@@ -91,3 +91,21 @@ func TestWidened(t *testing.T) {
 		t.Fatalf("Widen got %v", got)
 	}
 }
+
+func TestExtension(t *testing.T) {
+	if x, ok := (Host{}).Ext("dispatch"); ok || x != nil {
+		t.Fatalf("Ext with no lookup = %v, %v; want nil, false", x, ok)
+	}
+	h := Host{Extension: func(name string) (any, bool) {
+		if name == "dispatch" {
+			return "the dispatch extension", true
+		}
+		return nil, false
+	}}
+	if x, ok := h.Ext("dispatch"); !ok || x != "the dispatch extension" {
+		t.Fatalf("Ext(dispatch) = %v, %v", x, ok)
+	}
+	if _, ok := h.Ext("cortex"); ok {
+		t.Fatal("Ext(cortex) found an extension the app doesn't run")
+	}
+}

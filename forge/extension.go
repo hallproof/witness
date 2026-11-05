@@ -248,7 +248,7 @@ func (e *Extension) Register(app forge.App) error {
 		return err
 	}
 	return forge.OnStarted(app, "witness-start", func(ctx context.Context, a forge.App) error {
-		e.discoverAndStart(ctx, a.Container())
+		e.discoverAndStart(ctx, a.Container(), extensionsOf(a))
 		return nil
 	})
 }
@@ -313,4 +313,15 @@ func (e *Extension) stopWitness(ctx context.Context) {
 			log.Warn("witness: stopped with evidence unsent", "error", err)
 		}
 	})
+}
+
+// extensionsOf looks up a's extensions by name for adapter.Host.Extension.
+func extensionsOf(a forge.App) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		x, err := a.GetExtension(name)
+		if err != nil || x == nil {
+			return nil, false
+		}
+		return x, true
+	}
 }
