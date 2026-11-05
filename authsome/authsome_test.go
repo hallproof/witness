@@ -24,6 +24,7 @@ import (
 
 	"github.com/hallproof/witness"
 	"github.com/hallproof/witness/adapter"
+	"github.com/hallproof/witness/collect"
 	"github.com/hallproof/witness/ingesttest"
 )
 
@@ -695,4 +696,79 @@ func TestOrglessPrincipalsOwnedByCustomers(t *testing.T) {
 	if agents[staffAgent.String()] == nil || agents[platformAgent.String()] == nil {
 		t.Errorf("agents = %v, want the staff and platform ones", keys(agents))
 	}
+}
+
+// authsomeExt stands in for Authsome's Forge extension: only its getter.
+type authsomeExt struct{ eng *authsome.Engine }
+
+func (x authsomeExt) Engine() *authsome.Engine { return x.eng }
+
+// extHost is a host whose app runs ext under Authsome's extension name.
+func extHost(t *testing.T, c any, ext any) (adapter.Host, *witness.Witness) {
+	t.Helper()
+	w := newWitness(t)
+	return adapter.Host{
+		Witness:   w,
+		Container: c,
+		Extension: func(name string) (any, bool) {
+			if name == "authsome" {
+				return ext, true
+			}
+			return nil, false
+		},
+	}, w
+}
+
+// countingContainer registers the engine with a constructor, as Authsome's
+// extension does, and counts how often the container builds it.
+func countingContainer(t *testing.T, eng *authsome.Engine) (vessel.Vessel, *int) {
+	t.Helper()
+	calls := new(int)
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*authsome.Engine, error) {
+		*calls++
+		return eng, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, calls
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	c, calls := countingContainer(t, f.eng)
+	h, w := extHost(t, c, authsomeExt{eng: f.eng})
+	found, err := registered(t).Attach(context.Background(), h)
+	if !found || err != nil {
+		t.Fatalf("found=%v err=%v, want true, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	if !taken(t, w, "authsome.staff-users") {
+		t.Error("authsome.staff-users was not registered")
+	}
+}
+
+func TestAttachExtensionWithoutEngine(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	c, calls := countingContainer(t, f.eng)
+	h, w := extHost(t, c, authsomeExt{})
+	found, err := registered(t).Attach(context.Background(), h)
+	if found || err != nil {
+		t.Fatalf("found=%v err=%v, want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	if taken(t, w, "authsome.staff-users") {
+		t.Error("authsome.staff-users was registered with no engine")
+	}
+}
+
+// taken reports whether a population key is already registered on w.
+func taken(t *testing.T, w *witness.Witness, key string) bool {
+	t.Helper()
+	err := w.Population(collect.Population{Key: key, Title: "probe", Collect: func(context.Context) ([]map[string]any, error) { return nil, nil }})
+	return err != nil && strings.Contains(err.Error(), "already used")
 }

@@ -31,21 +31,24 @@ func init() {
 	adapter.Register(adapter.Adapter{
 		Name:   Name,
 		Module: Module,
-		After:  []string{"authsome"},
+		After:  []string{extensionName},
 		Attach: attach,
 	})
 }
 
-// attach finds *authsome.Engine in the host's container. An app without one
-// doesn't run Authsome, which is not an error.
+// extensionName is Authsome's own Forge extension, which builds and starts
+// the engine.
+const extensionName = "authsome"
+
+// attach finds the app's *authsome.Engine and registers the collectors. An
+// app without one doesn't run Authsome, which is not an error.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*authsome.Engine](c) {
-		return false, nil
-	}
-	eng, err := vessel.Inject[*authsome.Engine](c)
+	eng, err := engine(h)
 	if err != nil {
-		return true, fmt.Errorf("witness/authsome: resolve the engine: %w", err)
+		return true, err
+	}
+	if eng == nil {
+		return false, nil
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
@@ -58,6 +61,40 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		h.Widened("all_platform_users")
 	}
 	return true, nil
+}
+
+// engine returns the app's Authsome engine, or nil when it has none. It
+// reads the engine through Authsome's extension when the app runs it, and
+// never asks the container then: the extension registers the engine with a
+// constructor, and a container that builds it starts it a second time. Only
+// an app without the extension is looked up in the container, where an app
+// that builds its own engine provides the finished value.
+func engine(h adapter.Host) (*authsome.Engine, error) {
+	if x, ok := h.Ext(extensionName); ok {
+		if g, ok := x.(interface{ Engine() *authsome.Engine }); ok {
+			if eng := g.Engine(); eng != nil {
+				return eng, nil
+			}
+			logger(h).Warn("witness/authsome: the authsome extension has no engine yet, so nothing is collected")
+			return nil, nil
+		}
+	}
+	c, ok := h.Container.(vessel.Vessel)
+	if !ok || c == nil || !vessel.HasType[*authsome.Engine](c) {
+		return nil, nil
+	}
+	eng, err := vessel.Inject[*authsome.Engine](c)
+	if err != nil {
+		return nil, fmt.Errorf("witness/authsome: resolve the engine: %w", err)
+	}
+	return eng, nil
+}
+
+func logger(h adapter.Host) *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
 }
 
 // Options are the adapter's switches. In a Forge app they come from

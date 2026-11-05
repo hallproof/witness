@@ -5,9 +5,18 @@
 // # Using it
 //
 // In a Forge app you only import it. Add witness/forge and a blank import,
-// and the adapter finds your *authsome.Engine in the container by type:
+// and the adapter finds your *authsome.Engine:
 //
 //	import _ "github.com/hallproof/witness/authsome"
+//
+// It asks Authsome's own Forge extension ("authsome") for the engine first,
+// through its Engine method. Only when your app doesn't run that extension
+// does it look for a *authsome.Engine in the container. The order matters:
+// the extension registers the engine with a constructor, and a container
+// that builds it on request starts it again. So if you build the engine
+// yourself, provide the finished value with forge.ProvideValue(c, eng), not
+// a constructor. An extension that has no engine yet counts as no Authsome,
+// and the adapter logs it.
 //
 // Its options go under extensions.witness.adapters.authsome:
 //
