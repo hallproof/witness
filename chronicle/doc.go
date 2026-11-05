@@ -6,11 +6,20 @@
 //	import _ "github.com/hallproof/witness/chronicle"
 //
 // The adapter registers itself as a chain adapter, so witness/forge
-// attaches it before every other library. It looks for a
-// *chronicle.Chronicle in the container first (an app that builds Chronicle
-// itself provides that), then for the chronicle.Emitter that Chronicle's
-// own Forge extension provides, which it type-asserts. If neither is
-// there, witness starts without a chain and event recording stays off.
+// attaches it before every other library. It reads Chronicle through
+// Chronicle's own Forge extension (named "chronicle") and its Chronicle
+// getter, and doesn't touch the container when that extension runs: the
+// extension registers Chronicle there with a constructor, and the container
+// starts whatever a constructor builds the first time anyone asks for it.
+// If the extension is there but has no Chronicle yet, the adapter logs it
+// and witness starts without a chain.
+//
+// Only when your app doesn't run Chronicle's extension does the adapter
+// look in the container, for a *chronicle.Chronicle first and then for a
+// chronicle.Emitter that is one. If you build Chronicle yourself, provide
+// the finished value there (vessel.ProvideValue or forge.ProvideValue), not
+// a constructor. If the adapter finds nothing, witness starts without a
+// chain and event recording stays off.
 //
 // Outside Forge, build the chain yourself and hand it to witness:
 //
@@ -100,6 +109,6 @@
 // app that builds Chronicle itself has to write its own loop to seal
 // checkpoints. audit.Query can't filter by stream and sequence range, so
 // Prove reads every event in a checkpoint, a thousand at a time, to find
-// the ones to cite. And the Forge extension provides only chronicle.Emitter,
-// which is why the adapter type-asserts.
+// the ones to cite. And the Forge extension puts only chronicle.Emitter in
+// the container, which is why the container lookup type-asserts.
 package chronicle

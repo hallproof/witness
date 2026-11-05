@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	xchronicle "github.com/xraph/chronicle"
 	"github.com/xraph/chronicle/checkpoint"
@@ -36,10 +37,11 @@ type Config struct {
 	Streams map[string]Scope `json:"streams"`
 }
 
-// attach finds the app's Chronicle in the container, binds a Chain over
-// it as witness's chain, and registers the platform stream's snapshot.
+// attach finds the app's Chronicle, through Chronicle's extension or else
+// the container, binds a Chain over it as witness's chain, and registers
+// the platform stream's snapshot.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	trail := find(h.Container)
+	trail := findTrail(h)
 	if trail == nil {
 		return false, nil
 	}
@@ -70,9 +72,44 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	return true, c.Register(h.Witness)
 }
 
+// extensionName is the name Chronicle's own Forge extension registers
+// under.
+const extensionName = "chronicle"
+
+// chronicleGetter is Chronicle's Forge extension, read through its getter,
+// so the adapter needn't import the extension package.
+type chronicleGetter interface {
+	Chronicle() *xchronicle.Chronicle
+}
+
+// findTrail returns the app's *chronicle.Chronicle, or nil. It asks
+// Chronicle's own extension first: the extension registers Chronicle in
+// the container with a constructor, and the container starts whatever a
+// constructor returns the first time anyone asks for it, so the container
+// is only read for an app that doesn't run the extension.
+func findTrail(h adapter.Host) *xchronicle.Chronicle {
+	x, ok := h.Ext(extensionName)
+	if !ok {
+		return find(h.Container)
+	}
+	log := h.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	g, ok := x.(chronicleGetter)
+	if !ok {
+		log.Warn("witness: the chronicle extension has no Chronicle getter, so witness runs without a chain", "type", fmt.Sprintf("%T", x))
+		return nil
+	}
+	trail := g.Chronicle()
+	if trail == nil {
+		log.Warn("witness: the chronicle extension has no Chronicle yet, so witness runs without a chain")
+	}
+	return trail
+}
+
 // find returns the *chronicle.Chronicle in container, provided as itself
-// (an app that builds Chronicle) or as chronicle.Emitter (Chronicle's own
-// Forge extension), or nil.
+// or as a chronicle.Emitter that is one, or nil.
 func find(container any) *xchronicle.Chronicle {
 	v, ok := container.(vessel.Vessel)
 	if !ok || v == nil {

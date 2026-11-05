@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -358,5 +359,85 @@ func TestPlatformStreamSnapshotIsStable(t *testing.T) {
 	}
 	if got := settingsHash(t, snap); got == first {
 		t.Fatal("a checkpoint under a new key didn't change the snapshot")
+	}
+}
+
+// chronicleExt stands in for Chronicle's Forge extension, read through its
+// Chronicle getter.
+type chronicleExt struct{ trail *xchronicle.Chronicle }
+
+func (x chronicleExt) Chronicle() *xchronicle.Chronicle { return x.trail }
+
+func extensions(byName map[string]any) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		x, ok := byName[name]
+		return x, ok
+	}
+}
+
+// Chronicle's extension registers its Emitter with a constructor, which the
+// container calls, and starts what it returns, on the first Inject. Attach
+// reads Chronicle through the extension and leaves the container alone.
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*xchronicle.Chronicle, error) {
+		built.Add(1)
+		return f.trail, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vessel.Provide(c, func() (xchronicle.Emitter, error) {
+		built.Add(1)
+		return f.trail, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h, _, w, lazy := host(t, c)
+	h.Extension = extensions(map[string]any{"chronicle": chronicleExt{trail: f.trail}})
+	found, err := registered(t).Attach(context.Background(), h)
+	if !found || err != nil {
+		t.Fatalf("found %v, err %v", found, err)
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built Chronicle %d times; attach must read it through the extension", n)
+	}
+	if _, ok := lazy.get().(*wchronicle.Chain); !ok {
+		t.Fatalf("bound %T, want *Chain", lazy.get())
+	}
+	dup := collect.Snapshot{Key: wchronicle.SnapshotKey, Title: "dup", Collect: func(context.Context) (map[string]any, error) { return nil, nil }}
+	if err = w.Snapshot(dup); err == nil || !strings.Contains(err.Error(), "already used") {
+		t.Fatalf("the snapshot key is free: %v", err)
+	}
+}
+
+// An extension with no Chronicle yet means Chronicle isn't ready: attach
+// reports it absent, binds no chain, and doesn't fall back to the container.
+func TestAttachExtensionWithoutChronicle(t *testing.T) {
+	f := newFixture(t)
+	for name, x := range map[string]any{"nil chronicle": chronicleExt{}, "other getter": struct{}{}} {
+		t.Run(name, func(t *testing.T) {
+			var built atomic.Int32
+			c := vessel.New()
+			if err := vessel.Provide(c, func() (*xchronicle.Chronicle, error) {
+				built.Add(1)
+				return f.trail, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			h, _, _, lazy := host(t, c)
+			h.Extension = extensions(map[string]any{"chronicle": x})
+			found, err := registered(t).Attach(context.Background(), h)
+			if found || err != nil {
+				t.Fatalf("found %v, err %v", found, err)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built Chronicle %d times", n)
+			}
+			if _, off := lazy.get().(chain.Unconfigured); !off {
+				t.Fatal("a chain was bound")
+			}
+		})
 	}
 }
