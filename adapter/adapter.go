@@ -6,6 +6,8 @@
 // witness/forge calls each registered adapter's Attach with the app's
 // container. Attach finds the library's engine there, or reports that the app
 // doesn't run that library, and registers its collectors on the witness.
+// An adapter registers them through a Set, all at once or not at all, so an
+// adapter that fails part-way leaves none of its collectors behind.
 //
 // This package imports only the standard library and witness itself, so an
 // adapter pays for nothing here beyond what its own library needs.
@@ -15,6 +17,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -22,6 +25,7 @@ import (
 
 	"github.com/hallproof/witness"
 	"github.com/hallproof/witness/chain"
+	"github.com/hallproof/witness/collect"
 )
 
 // Platform is the stream name event-proof collectors ask the chain for: the
@@ -167,6 +171,71 @@ func Decode(src map[string]any, dst any) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if err := dec.Decode(dst); err != nil {
 		return fmt.Errorf("witness/adapter: config: %w", err)
+	}
+	return nil
+}
+
+// Set is a group of collectors that are registered together or not at all.
+// An adapter adds its snapshots, populations and event proofs to a Set and
+// calls Register once, so a collector that fails part-way (a key already
+// used, a bad title) doesn't leave the ones before it running while the host
+// reports the library as skipped.
+//
+// The zero Set is empty and ready to use.
+type Set struct {
+	items []setItem
+}
+
+type setItem struct {
+	key string
+	add func(*witness.Witness) error
+}
+
+// Snapshot adds snapshot collectors to the set.
+func (s *Set) Snapshot(cs ...collect.Snapshot) {
+	for _, c := range cs {
+		s.items = append(s.items, setItem{c.Key, func(w *witness.Witness) error { return w.Snapshot(c) }})
+	}
+}
+
+// Population adds population collectors to the set.
+func (s *Set) Population(cs ...collect.Population) {
+	for _, c := range cs {
+		s.items = append(s.items, setItem{c.Key, func(w *witness.Witness) error { return w.Population(c) }})
+	}
+}
+
+// EventProof adds event proof collectors to the set.
+func (s *Set) EventProof(cs ...collect.EventProof) {
+	for _, c := range cs {
+		s.items = append(s.items, setItem{c.Key, func(w *witness.Witness) error { return w.EventProof(c) }})
+	}
+}
+
+// Len is how many collectors the set holds.
+func (s *Set) Len() int { return len(s.items) }
+
+// Register adds every collector in the set to w, in the order they were
+// added to the set. When one fails, it removes the ones it added before it
+// (never a collector someone else registered) and returns that error, so w
+// holds either all of the set or none of it. Call it before w.Start: a
+// witness that starts while Register runs refuses the rest and can't give
+// back the ones already added, and the error then names them.
+func (s *Set) Register(w *witness.Witness) error {
+	if w == nil {
+		return errors.New("witness/adapter: Set.Register needs a witness")
+	}
+	for i, it := range s.items {
+		err := it.add(w)
+		if err == nil {
+			continue
+		}
+		for j := i - 1; j >= 0; j-- {
+			if !w.Remove(s.items[j].key) {
+				err = errors.Join(err, fmt.Errorf("witness/adapter: couldn't take collector %q back out", s.items[j].key))
+			}
+		}
+		return err
 	}
 	return nil
 }

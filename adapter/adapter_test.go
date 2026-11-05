@@ -2,7 +2,12 @@ package adapter
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
+
+	"github.com/hallproof/witness"
+	"github.com/hallproof/witness/collect"
 )
 
 func reset(t *testing.T) {
@@ -107,5 +112,109 @@ func TestExtension(t *testing.T) {
 	}
 	if _, ok := h.Ext("cortex"); ok {
 		t.Fatal("Ext(cortex) found an extension the app doesn't run")
+	}
+}
+
+func newWitness(t *testing.T) *witness.Witness {
+	t.Helper()
+	w, err := witness.New(witness.Options{
+		Endpoint:  "http://localhost:1",
+		IngestKey: "hpk_test",
+		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return w
+}
+
+func snap(key string) collect.Snapshot {
+	return collect.Snapshot{Key: key, Title: "t", Collect: func(context.Context) (map[string]any, error) { return nil, nil }}
+}
+
+func pop(key string) collect.Population {
+	return collect.Population{Key: key, Title: "t", Source: key, Collect: func(context.Context) ([]map[string]any, error) { return nil, nil }}
+}
+
+func proof(key string) collect.EventProof {
+	return collect.EventProof{Key: key, Title: "t", Stream: Platform, Actions: []string{"user.login"}}
+}
+
+// registered reports which of keys w holds, removing them as it checks.
+func registered(w *witness.Witness, keys ...string) []string {
+	var out []string
+	for _, k := range keys {
+		if w.Remove(k) {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func TestSetRegistersEverything(t *testing.T) {
+	w := newWitness(t)
+	var s Set
+	s.Snapshot(snap("a"))
+	s.Population(pop("b"), pop("c"))
+	s.EventProof(proof("d"))
+	if s.Len() != 4 {
+		t.Fatalf("Len() = %d, want 4", s.Len())
+	}
+	if err := s.Register(w); err != nil {
+		t.Fatal(err)
+	}
+	if got := registered(w, "a", "b", "c", "d"); len(got) != 4 {
+		t.Fatalf("registered %v, want a, b, c and d", got)
+	}
+}
+
+func TestSetRollsBackWhenOneFails(t *testing.T) {
+	cases := map[string]func(w *witness.Witness, s *Set){
+		"key the witness already has": func(w *witness.Witness, s *Set) {
+			if err := w.Snapshot(snap("taken")); err != nil {
+				t.Fatal(err)
+			}
+			s.EventProof(proof("taken"))
+		},
+		"bad title": func(_ *witness.Witness, s *Set) {
+			bad := snap("bad")
+			bad.Title = " "
+			s.Snapshot(bad)
+		},
+		"key used twice in the set": func(_ *witness.Witness, s *Set) {
+			s.Population(pop("a"))
+		},
+		"event proof without actions": func(_ *witness.Witness, s *Set) {
+			e := proof("e")
+			e.Actions = nil
+			s.EventProof(e)
+		},
+	}
+	for name, last := range cases {
+		t.Run(name, func(t *testing.T) {
+			w := newWitness(t)
+			var s Set
+			s.Snapshot(snap("a"))
+			s.Population(pop("b"))
+			s.EventProof(proof("c"))
+			last(w, &s)
+			if err := s.Register(w); err == nil {
+				t.Fatal("Register = nil, want the failing collector's error")
+			}
+			if got := registered(w, "a", "b", "c", "bad", "e"); len(got) != 0 {
+				t.Fatalf("still registered after a failed Register: %v", got)
+			}
+			if name == "key the witness already has" && len(registered(w, "taken")) != 1 {
+				t.Fatal("Register removed a collector it didn't add")
+			}
+		})
+	}
+}
+
+func TestSetNeedsAWitness(t *testing.T) {
+	var s Set
+	s.Snapshot(snap("a"))
+	if err := s.Register(nil); err == nil {
+		t.Fatal("Register(nil) = nil, want an error")
 	}
 }
