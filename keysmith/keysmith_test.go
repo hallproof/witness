@@ -663,3 +663,75 @@ func TestPagingFailsWhenTheStoreIgnoresOffset(t *testing.T) {
 		}
 	}
 }
+
+// keysmithExt stands in for Keysmith's Forge extension: only its getter.
+type keysmithExt struct{ eng *ks.Engine }
+
+func (x keysmithExt) Engine() *ks.Engine { return x.eng }
+
+// extHost is a host whose app runs ext under Keysmith's extension name.
+func extHost(t *testing.T, c any, ext any) (adapter.Host, *witness.Witness) {
+	t.Helper()
+	w := newWitness(t)
+	return adapter.Host{
+		Witness:   w,
+		Scope:     adapter.Scope{AppID: platformApp, TenantID: "platform"},
+		Container: c,
+		Config:    map[string]any{"staff_tenants": []any{staff}},
+		Extension: func(name string) (any, bool) {
+			if name == "keysmith" {
+				return ext, true
+			}
+			return nil, false
+		},
+	}, w
+}
+
+// countingContainer registers the engine with a constructor, as Keysmith's
+// extension does, and counts how often the container builds it.
+func countingContainer(t *testing.T, eng *ks.Engine) (vessel.Vessel, *int) {
+	t.Helper()
+	calls := new(int)
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*ks.Engine, error) {
+		*calls++
+		return eng, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, calls
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.eng)
+	h, w := extHost(t, c, keysmithExt{eng: f.eng})
+	found, err := attach(context.Background(), h)
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	for _, k := range []string{KeyAPIKeys, KeyPolicies} {
+		if !taken(t, w, k) {
+			t.Errorf("%s was not registered", k)
+		}
+	}
+}
+
+func TestAttachExtensionWithoutEngine(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.eng)
+	h, w := extHost(t, c, keysmithExt{})
+	found, err := attach(context.Background(), h)
+	if found || err != nil {
+		t.Fatalf("attach = %v, %v; want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	if taken(t, w, KeyAPIKeys) {
+		t.Errorf("%s was registered with no engine", KeyAPIKeys)
+	}
+}

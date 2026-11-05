@@ -75,13 +75,18 @@
 // # Using it
 //
 // With Forge, import the package for its side effect, and the witness
-// extension finds *keysmith.Engine in the container:
+// extension finds your *keysmith.Engine:
 //
 //	import _ "github.com/hallproof/witness/keysmith"
 //
-// The engine has to be in the container by type. Keysmith's own Forge
-// extension provides it. If you build the engine yourself, provide it with
-// forge.ProvideValue(c, engine).
+// It asks Keysmith's own Forge extension ("keysmith") for the engine first,
+// through its Engine method. Only when your app doesn't run that extension
+// does it look for a *keysmith.Engine in the container. The order matters:
+// the extension registers the engine with a constructor, and a container
+// that builds it on request starts it again. So if you build the engine
+// yourself, provide the finished value with forge.ProvideValue(c, engine),
+// not a constructor. An extension that has no engine yet counts as no
+// Keysmith, and the adapter logs it.
 //
 // Without Forge, build the adapter and register it before you start
 // witness:

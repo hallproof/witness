@@ -224,29 +224,33 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 	return pops, snaps, proofs, nil
 }
 
+// extensionName is Keysmith's own Forge extension, which builds and starts
+// the engine.
+const extensionName = "keysmith"
+
 func init() {
 	adapter.Register(adapter.Adapter{
 		Name:   Name,
 		Module: Module,
-		After:  []string{"keysmith"},
+		After:  []string{extensionName},
 		Attach: attach,
 	})
 }
 
-// attach finds *keysmith.Engine in the host's container and registers the
-// collectors. With no staff tenants it logs why and registers nothing.
+// attach finds the app's *keysmith.Engine and registers the collectors.
+// With no staff tenants it logs why and registers nothing.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*ks.Engine](c) {
+	eng, err := engine(h)
+	if err != nil {
+		return true, err
+	}
+	if eng == nil {
 		return false, nil
 	}
 	var o Options
-	if err := adapter.Decode(h.Config, &o); err != nil {
-		return true, err
-	}
-	eng, err := vessel.Inject[*ks.Engine](c)
+	err = adapter.Decode(h.Config, &o)
 	if err != nil {
-		return true, fmt.Errorf("witness/keysmith: resolve the engine: %w", err)
+		return true, err
 	}
 	if o.AppID == "" {
 		o.AppID = h.Scope.AppID
@@ -256,11 +260,7 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	err = newAdapter(eng, o).Register(h.Witness)
 	if errors.Is(err, ErrNoTenants) {
-		log := h.Logger
-		if log == nil {
-			log = slog.Default()
-		}
-		log.Warn("witness: keysmith found, but no staff_tenants are set, so no keys are collected")
+		logger(h).Warn("witness: keysmith found, but no staff_tenants are set, so no keys are collected")
 		return true, nil
 	}
 	if err != nil {
@@ -270,4 +270,38 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		h.Widened("all_tenants")
 	}
 	return true, nil
+}
+
+// engine returns the app's Keysmith engine, or nil when it has none. It
+// reads the engine through Keysmith's extension when the app runs it, and
+// never asks the container then: the extension registers the engine with a
+// constructor, and a container that builds it starts it a second time. Only
+// an app without the extension is looked up in the container, where an app
+// that builds its own engine provides the finished value.
+func engine(h adapter.Host) (*ks.Engine, error) {
+	if x, ok := h.Ext(extensionName); ok {
+		if g, ok := x.(interface{ Engine() *ks.Engine }); ok {
+			if eng := g.Engine(); eng != nil {
+				return eng, nil
+			}
+			logger(h).Warn("witness/keysmith: the keysmith extension has no engine yet, so nothing is collected")
+			return nil, nil
+		}
+	}
+	c, ok := h.Container.(vessel.Vessel)
+	if !ok || c == nil || !vessel.HasType[*ks.Engine](c) {
+		return nil, nil
+	}
+	eng, err := vessel.Inject[*ks.Engine](c)
+	if err != nil {
+		return nil, fmt.Errorf("witness/keysmith: resolve the engine: %w", err)
+	}
+	return eng, nil
+}
+
+func logger(h adapter.Host) *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
 }
