@@ -443,3 +443,46 @@ func TestProofCheckpointMovesOnlyOnSuccess(t *testing.T) {
 		t.Fatalf("requests %+v, want the second to start from the beginning again", fc.reqs)
 	}
 }
+
+// Hallproof takes every_seconds of 1 to 86400. A sub-second interval, as in
+// tests, still says 1.
+func TestHeartbeatEverySecondsIsAtLeastOne(t *testing.T) {
+	f := &fakeSender{}
+	s := NewScheduler(f, chain.Unconfigured{}, SchedulerOptions{HeartbeatEvery: 20 * time.Millisecond})
+	if err := s.AddSnapshot(Snapshot{Key: "fast", Title: "t", Every: 20 * time.Millisecond, Collect: func(context.Context) (map[string]any, error) {
+		return map[string]any{"ok": true}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	eventually(t, "a heartbeat", 2*time.Second, func() bool { return len(f.sent(push.KindHeartbeat)) > 0 })
+	cancel()
+	<-done
+	hb, err := push.DecodeBody[push.Heartbeat](f.sent(push.KindHeartbeat)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hb.EverySeconds != 1 {
+		t.Fatalf("every_seconds = %d for a 20ms interval, want 1", hb.EverySeconds)
+	}
+}
+
+func TestEverySeconds(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want int
+	}{
+		{20 * time.Millisecond, 1},
+		{time.Second, 1},
+		{1500 * time.Millisecond, 2},
+		{10 * time.Minute, 600},
+		{24 * time.Hour, 86400},
+		{48 * time.Hour, 86400},
+	} {
+		if got := everySeconds(tc.d); got != tc.want {
+			t.Errorf("everySeconds(%v) = %d, want %d", tc.d, got, tc.want)
+		}
+	}
+}

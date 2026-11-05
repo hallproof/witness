@@ -382,7 +382,7 @@ func (s *Scheduler) sendHeartbeats() {
 			Hash:         c.lastHash,
 			Healthy:      c.healthy,
 			LastSuccess:  c.lastSuccess,
-			EverySeconds: int(s.o.HeartbeatEvery / time.Second),
+			EverySeconds: everySeconds(s.o.HeartbeatEvery),
 			Replica:      s.o.Replica,
 			SDK:          s.o.SDK,
 		})
@@ -401,4 +401,15 @@ func (s *Scheduler) sendHeartbeats() {
 	if len(msgs) > 0 {
 		s.send.Enqueue(msgs...)
 	}
+}
+
+// MaxHeartbeatEvery is the longest heartbeat interval Hallproof takes.
+const MaxHeartbeatEvery = 24 * time.Hour
+
+// everySeconds is d as the whole seconds a heartbeat reports, rounded up and
+// kept to the 1 to 86400 Hallproof takes. A sub-second interval reports 1,
+// which only makes the receiver more patient than it needs to be.
+func everySeconds(d time.Duration) int {
+	s := int((d + time.Second - 1) / time.Second)
+	return min(max(s, 1), int(MaxHeartbeatEvery/time.Second))
 }
