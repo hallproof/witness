@@ -50,7 +50,7 @@ defer w.Stop(shutdownCtx)
 
 ## What it sends
 
-Metadata, never content. A snapshot is the settings map you return, and a population is the list of items you return, each with an `id`. Witness hashes both and pushes them on the first run and again only when the hash changes. Between changes, each collector sends a small heartbeat so Hallproof can tell a quiet collector from a dead one.
+Metadata, never content. A snapshot is the settings map you return, and a population is the list of items you return, each with an `id`. Witness hashes both and pushes them on the first run, whenever the hash changes, and once a day so the newest evidence is never stale. In between, each collector sends a small heartbeat with its current hash, so Hallproof can tell a quiet collector from a dead one.
 
 Return who has access and how things are configured. Don't return passwords, tokens, secret values, message bodies or documents: Hallproof doesn't need them, and an evidence tool that leaks customer data is worse than no evidence at all.
 
@@ -64,7 +64,7 @@ Event recording needs a chain to write to. This release ships without one, so th
 
 ## When Hallproof is down
 
-Your app doesn't notice. Collectors run on their own goroutines, and pushes go through a queue that never blocks. If Hallproof can't be reached, messages wait in the queue and go out when it's back. When the queue fills up, the oldest messages are dropped first, and witness counts every drop and logs them, at most once a minute. `Stop` sends what's queued and gives up when your shutdown context runs out, telling you how many messages it left behind.
+Your app doesn't notice. Collectors run on their own goroutines, and pushes go through a queue that never blocks. If Hallproof can't be reached, messages wait in the queue and go out when it's back. When the queue fills up, heartbeats go first and then the oldest evidence, and witness counts every drop and logs them, at most once a minute. If it can't get through at all, it says so in the log once, not on every retry. `Stop` sends what's queued and gives up when your shutdown context runs out, telling you how many messages it left behind.
 
 A collector that panics, errors or hangs past its interval is logged and marked unhealthy in its next heartbeat. The other collectors keep going.
 

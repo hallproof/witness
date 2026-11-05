@@ -58,7 +58,7 @@ The HTTP status tells you what happened to the batch as a whole.
 - `413`: the batch is over 8 MiB. Split it and send the halves.
 - `500`: Hallproof failed while storing the batch. Send the whole batch again. Messages it stored before the failure come back `duplicate`, so a resend is always safe.
 
-Retry 500, 502, 503, 504 and network errors with backoff. Retry 429 the same way, after the `Retry-After` header if there is one. Never retry a 400 or a 401 unchanged.
+Retry 500, 502, 503, 504 and network errors with backoff. Retry 429 the same way, after the `Retry-After` header if there is one. Never resend a batch that got a 400 unchanged. A 401 means the key is wrong or revoked: back off, and retry only slowly until someone fixes the key, because nothing you send will get through before then.
 
 ## The kinds
 
@@ -107,12 +107,12 @@ A Hallproof that predates heartbeats answers `unsupported`, and it notes every m
 
 None of this is part of the protocol, and Hallproof doesn't check it. It's how the Go SDK behaves, written down so SDKs in other languages can match it.
 
-An evidence message's ID is the collector's key, a colon, and the hex sha256 of the body's canonical JSON, as in `auth-settings:6f1e...`. When several copies of an app collect the same state they build the same ID, so Hallproof keeps one copy and answers `duplicate` to the rest, and when a developer edits a collector's title or tests the body changes and the ID changes with it, which stops the new body being rejected as a reused ID. Heartbeat IDs are `hb:`, the key, a colon, and 32 random hex digits.
+An evidence message's ID is the collector's key, the hex sha256 of the body's canonical JSON, and the UTC day it was collected, joined by colons, as in `auth-settings:6f1e...:20261104`. When several copies of an app collect the same state on the same day they build the same ID, so Hallproof keeps one copy and answers `duplicate` to the rest. When a developer edits a collector's title or tests, the body changes and the ID changes with it, which stops the new body being rejected as a reused ID. And because the day is part of the ID, a setting that goes back to an old value on a later day arrives as new evidence instead of a duplicate of the old one. Heartbeat IDs are `hb:`, the key, a colon, and 32 random hex digits.
 
-A collector's evidence goes out on its first run and after that only when its content hash changes. Heartbeats cover the quiet stretches.
+A collector's evidence goes out on its first run, again whenever its content hash changes, and again on each new UTC day, so the newest evidence Hallproof holds is never more than a day old. Heartbeats carry the current hash in between, so a receiver can also spot a change that came and went within a day.
 
-After one `unsupported` answer, witness stops sending that kind for an hour.
+A kind Hallproof hasn't answered yet goes out as a single message first, and the rest of that kind wait for its answer. After an `unsupported` answer, witness stops sending that kind for an hour, then probes with one message again.
 
-Backoff starts at one second and doubles up to five minutes, with full jitter. A message bigger than a whole batch is rejected on the client and never sent.
+Backoff starts at one second and doubles up to five minutes, with full jitter. A message bigger than a whole batch is rejected on the client, logged, and never sent. When the queue is full, witness drops the oldest heartbeat before it drops any evidence.
 
 Collector keys are 1 to 100 characters of lowercase letters, digits, `.`, `_` and `-`, and start with a letter or digit.
