@@ -131,22 +131,17 @@ func (a *Adapter) tenantScoped() bool { return a.o.AllTenants || len(a.tenants) 
 // Register adds the adapter's collectors to w: the gateway-wide ones
 // always, and the key and budget populations when tenants are named or
 // AllTenants is on.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	if a.gw == nil {
 		return errors.New("witness/nexus: no gateway")
 	}
 	pops, snaps := a.collectors()
-	for _, s := range snaps {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Snapshot(snaps...)
+	set.Population(pops...)
+	return set.Register(w)
 }
 
 func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot) {
