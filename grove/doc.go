@@ -69,11 +69,23 @@
 //		_ "github.com/xraph/grove/drivers/pgdriver/pgmigrate"
 //	)
 //
-// Attach finds the unnamed *grove.DB the grove extension provides and
-// resolves each named one in databases. Without a *grove.DB in the
-// container the adapter does nothing. Run it in a process that imports your
-// driver's migrate package, such as your API server. Replicas send the same
-// evidence, and Hallproof drops the duplicates.
+// Attach reads the databases through the grove extension (named "grove"):
+// the default one from its DB getter, and each named one in databases from
+// its Manager. It doesn't ask the container for them when that extension
+// runs, because the extension registers them there with constructors, and
+// the container starts whatever a constructor builds the first time anyone
+// asks for it. If the extension is there but has no database yet, the
+// adapter logs it and does nothing.
+//
+// Only when your app doesn't run the grove extension does Attach look in the
+// container, for the unnamed *grove.DB and each named one. If you open the
+// databases yourself, provide the finished values there
+// (vessel.ProvideValue or forge.ProvideValue), not constructors. Without a
+// *grove.DB the adapter does nothing.
+//
+// Run it in a process that imports your driver's migrate package, such as
+// your API server. Replicas send the same evidence, and Hallproof drops the
+// duplicates.
 //
 // # Without Forge
 //

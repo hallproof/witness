@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"reflect"
 	"strings"
 	"time"
 
@@ -152,22 +154,35 @@ func init() {
 	})
 }
 
-// attach finds the unnamed *grove.DB in the host's container, and the named
-// ones the config lists, and registers the collectors.
+// attach finds the default grove database, and the named ones the config
+// lists, and registers the collectors.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
+	a, found, err := fromHost(h)
+	if !found || err != nil {
+		return found, err
+	}
+	return true, a.Register(h.Witness)
+}
+
+// fromHost builds the adapter on the app's grove databases: through grove's
+// own extension when the app runs it, else from the container.
+func fromHost(h adapter.Host) (*Adapter, bool, error) {
+	if x, ok := h.Ext(extensionName); ok {
+		return fromExtension(h, x)
+	}
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil || !vessel.HasType[*gv.DB](c) {
-		return false, nil
+		return nil, false, nil
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
-		return true, err
+		return nil, true, err
 	}
 	a, err := fromContainer(c, o)
 	if err != nil {
-		return true, err
+		return nil, true, err
 	}
-	return true, a.Register(h.Witness)
+	return a, true, nil
 }
 
 // fromContainer builds an adapter on the unnamed *grove.DB in c and the
@@ -193,4 +208,85 @@ func fromContainer(c vessel.Vessel, o Options) (*Adapter, error) {
 		opts = append(opts, WithDatabase(name, named))
 	}
 	return New(db, opts...), nil
+}
+
+// extensionName is the name grove's own Forge extension registers under.
+const extensionName = "grove"
+
+// dbGetter is grove's Forge extension, read through its DB getter, so the
+// adapter needn't import the extension package.
+type dbGetter interface{ DB() *gv.DB }
+
+// namedDBs is the part of grove/extension's DBManager the adapter uses.
+type namedDBs interface {
+	Get(name string) (*gv.DB, error)
+}
+
+// fromExtension builds the adapter on the databases grove's extension x
+// runs. It never asks the container: the extension registers its databases
+// there with constructors, and the container starts whatever a constructor
+// builds the first time anyone asks for it.
+func fromExtension(h adapter.Host, x any) (*Adapter, bool, error) {
+	log := h.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	g, ok := x.(dbGetter)
+	if !ok {
+		log.Warn("witness: the grove extension has no DB getter, so grove is skipped", "type", fmt.Sprintf("%T", x))
+		return nil, false, nil
+	}
+	db := g.DB()
+	if db == nil {
+		log.Warn("witness: the grove extension has no database yet, so grove is skipped")
+		return nil, false, nil
+	}
+	var o Options
+	if err := adapter.Decode(h.Config, &o); err != nil {
+		return nil, true, err
+	}
+	mgr := manager(x)
+	opts := make([]Option, 0, len(o.Databases))
+	for _, name := range o.Databases {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		if mgr == nil {
+			return nil, true, fmt.Errorf("witness/grove: database %q is in the config but grove runs a single database", name)
+		}
+		named, err := mgr.Get(name)
+		if err != nil {
+			return nil, true, fmt.Errorf("witness/grove: database %q is in the config but grove provides no database by that name: %w", name, err)
+		}
+		if named == nil {
+			return nil, true, fmt.Errorf("witness/grove: database %q is in the config but grove provides no database by that name", name)
+		}
+		opts = append(opts, WithDatabase(name, named))
+	}
+	return New(db, opts...), true, nil
+}
+
+// manager returns the named databases of grove's extension x, through its
+// Manager getter, or nil when it runs a single database. Manager returns
+// grove/extension's own DBManager type, which an interface here can't name
+// without importing that module and all of Forge with it, so it's called by
+// reflection and its result asserted to namedDBs.
+func manager(x any) namedDBs {
+	m := reflect.ValueOf(x).MethodByName("Manager")
+	if !m.IsValid() || m.Type().NumIn() != 0 || m.Type().NumOut() != 1 {
+		return nil
+	}
+	out := m.Call(nil)[0]
+	switch out.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		if out.IsNil() {
+			return nil
+		}
+	default:
+	}
+	if g, ok := out.Interface().(namedDBs); ok {
+		return g
+	}
+	return nil
 }

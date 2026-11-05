@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	gv "github.com/xraph/grove"
@@ -642,5 +644,140 @@ func TestNeverSendsContent(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "create_things") {
 		t.Fatalf("migration name missing: %s", raw)
+	}
+}
+
+// groveExt stands in for grove's Forge extension: DB is the default
+// database, and Manager the named ones (nil in single-database mode).
+type groveExt struct {
+	db  *gv.DB
+	mgr *dbManager
+}
+
+func (x groveExt) DB() *gv.DB          { return x.db }
+func (x groveExt) Manager() *dbManager { return x.mgr }
+
+// dbManager stands in for grove/extension's DBManager.
+type dbManager struct{ dbs map[string]*gv.DB }
+
+func (m *dbManager) Get(name string) (*gv.DB, error) {
+	if db, ok := m.dbs[name]; ok {
+		return db, nil
+	}
+	return nil, errors.New("no such database")
+}
+
+func extensions(byName map[string]any) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		x, ok := byName[name]
+		return x, ok
+	}
+}
+
+// countingContainer registers db and audit the way grove's extension does,
+// with constructors, and counts how often the container calls them.
+func countingContainer(t *testing.T, db, audit *gv.DB) (vessel.Vessel, *atomic.Int32) {
+	t.Helper()
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*gv.DB, error) {
+		built.Add(1)
+		return db, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vessel.ProvideNamed(c, "audit", func() *gv.DB {
+		built.Add(1)
+		return audit
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, &built
+}
+
+// The grove extension registers its databases with constructors, and the
+// container starts what a constructor builds the first time anyone asks.
+// Attach reads them through the extension's getters instead.
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	main := openSQLite(t, "main.db")
+	standard(t, main)
+	audit := openSQLite(t, "audit.db")
+	migrateUp(t, audit, []string{"2026-10-01 08:00:00"},
+		group(t, "chronicle", &migrate.Migration{Name: "create_events", Version: "20261001000000", Up: noop, Down: noop}))
+	c, built := countingContainer(t, main, audit)
+	h := adapter.Host{
+		Witness: newWitness(t), Container: c,
+		Config:    map[string]any{"databases": []any{"audit"}},
+		Extension: extensions(map[string]any{"grove": groveExt{db: main, mgr: &dbManager{dbs: map[string]*gv.DB{"audit": audit}}}}),
+	}
+	found, err := attach(context.Background(), h)
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	if !taken(t, h.Witness, KeyMigrations) || !snapTaken(t, h.Witness, KeyStatus) {
+		t.Fatal("attach did not register both collectors")
+	}
+	a, found, err := fromHost(h)
+	if !found || err != nil {
+		t.Fatalf("fromHost = %v, %v", found, err)
+	}
+	got := ids(items(t, a))
+	want := []string{
+		"default/core/20260101000000", "default/core/20260102000000", "default/billing/20260201000000",
+		"audit/chronicle/20261001000000",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ids = %v, want %v", got, want)
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built a database %d times; attach must read them through the extension", n)
+	}
+}
+
+// A named database the extension doesn't run fails Attach, naming it, the
+// same as the container path. In single-database mode the extension has no
+// manager.
+func TestAttachExtensionMissingNamedDatabase(t *testing.T) {
+	main := openSQLite(t, "main.db")
+	c, built := countingContainer(t, main, main)
+	for name, mgr := range map[string]*dbManager{"single": nil, "multi": {dbs: map[string]*gv.DB{}}} {
+		t.Run(name, func(t *testing.T) {
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: newWitness(t), Container: c,
+				Config:    map[string]any{"databases": []any{"analytics"}},
+				Extension: extensions(map[string]any{"grove": groveExt{db: main, mgr: mgr}}),
+			})
+			if !found || err == nil || !strings.Contains(err.Error(), `"analytics"`) {
+				t.Fatalf("attach = %v, %v; want true and an error naming the database", found, err)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built a database %d times", n)
+			}
+		})
+	}
+}
+
+// An extension with no database yet means grove isn't ready: attach
+// reports it absent and doesn't fall back to the container.
+func TestAttachExtensionWithoutDatabase(t *testing.T) {
+	main := openSQLite(t, "main.db")
+	c, built := countingContainer(t, main, main)
+	for name, x := range map[string]any{"nil db": groveExt{}, "other getter": struct{}{}} {
+		t.Run(name, func(t *testing.T) {
+			w := newWitness(t)
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: w, Container: c, Logger: slog.New(slog.DiscardHandler),
+				Extension: extensions(map[string]any{"grove": x}),
+			})
+			if found || err != nil {
+				t.Fatalf("attach = %v, %v; want false, nil", found, err)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built a database %d times", n)
+			}
+			if taken(t, w, KeyMigrations) {
+				t.Fatal("collectors were registered")
+			}
+		})
 	}
 }
