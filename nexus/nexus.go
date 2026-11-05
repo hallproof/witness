@@ -172,12 +172,18 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot) {
 		Every:       6 * time.Hour,
 		Collect:     a.collectModelsInUse,
 	}}
+	keys := "Every Nexus API key in the tenants you name, with its scopes, status, age and owner."
+	budgets := "Each tenant you name: its AI spending budget, rate limits and model restrictions."
+	if a.o.AllTenants {
+		keys = "Every Nexus API key in every tenant, customers included, because all_tenants is on, with its scopes, status, age and owner."
+		budgets = "The AI spending budget, rate limits and model restrictions of every tenant, customers included, because all_tenants is on."
+	}
 	if a.tenantScoped() {
 		pops = append(pops,
 			collect.Population{
 				Key:         KeyKeys,
 				Title:       "AI gateway API keys",
-				Description: "Every Nexus API key in scope, with its scopes, status, age and owner.",
+				Description: keys,
 				Source:      "nexus-keys",
 				Tests:       []string{"keys-rotated"},
 				Every:       15 * time.Minute,
@@ -186,7 +192,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot) {
 			collect.Population{
 				Key:         KeyBudgets,
 				Title:       "AI budgets and limits",
-				Description: "Each in-scope tenant's AI spending budget, rate limits and model restrictions.",
+				Description: budgets,
 				Source:      "nexus-tenants",
 				Every:       time.Hour,
 				Collect:     a.collectBudgets,
@@ -219,6 +225,11 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	gw, err := vessel.Inject[*nx.Gateway](c)
 	if err != nil {
 		return true, fmt.Errorf("witness/nexus: resolve the gateway: %w", err)
+	}
+	// The host reports its own scope. Only this adapter's config is ours to
+	// report.
+	if o.AllTenants {
+		h.Widened("all_tenants")
 	}
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	log := h.Logger

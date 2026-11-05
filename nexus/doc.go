@@ -83,8 +83,11 @@
 // Hallproof.
 //
 // AllTenants (config all_tenants, or the witness scope's AllTenants) reads
-// every tenant's keys and budgets, your customers' included. Hallproof shows
-// that the scope was widened.
+// every tenant's keys and budgets, your customers' included, and the two
+// collectors' descriptions say so. Hallproof shows that the scope was
+// widened: when it's this adapter's own all_tenants, attach tells the host
+// through Host.Widened, and the witness scope's AllTenants is the host's
+// to report.
 //
 // A scope holding more than push.MaxItems keys or tenants fails the run with
 // ErrTooMany and the heartbeat reports the collector unhealthy, because a
