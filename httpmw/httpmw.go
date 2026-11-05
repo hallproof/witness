@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -115,11 +116,22 @@ type middleware struct {
 	o    Options
 	skip map[string]bool
 
-	mu       sync.Mutex
-	lastWarn time.Time
+	mu        sync.Mutex
+	lastWarn  time.Time
+	lastPanic time.Time
 }
 
+// record writes r to the chain. A panic in the ActorFunc, the Route func or
+// the chain is logged and goes no further: the handler already ran, and the
+// response must reach the client as the handler wrote it.
 func (m *middleware) record(r *http.Request, status int) {
+	defer func() {
+		if p := recover(); p != nil {
+			if m.allow(&m.lastPanic) {
+				m.o.Logger.Error("witness: recording a request panicked", "panic", p, "stack", string(debug.Stack()))
+			}
+		}
+	}()
 	actor, ok := m.o.Actor(r)
 	if !ok || (!actor.Staff && !m.o.AllActors) {
 		return
@@ -146,16 +158,22 @@ func (m *middleware) record(r *http.Request, status int) {
 	if err == nil || errors.Is(err, chain.ErrNoChain) {
 		return
 	}
-	m.mu.Lock()
-	now := time.Now()
-	warn := now.Sub(m.lastWarn) >= warnEvery
-	if warn {
-		m.lastWarn = now
-	}
-	m.mu.Unlock()
-	if warn {
+	if m.allow(&m.lastWarn) {
 		m.o.Logger.Warn("witness: couldn't record a request", "action", action, "error", err)
 	}
+}
+
+// allow reports whether a log line limited to once per warnEvery may go out
+// now, and if so notes the time in last.
+func (m *middleware) allow(last *time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if now.Sub(*last) < warnEvery {
+		return false
+	}
+	*last = now
+	return true
 }
 
 // route turns a pattern such as "POST /items/{id}" or "/items/{id}" into

@@ -257,3 +257,47 @@ func TestForwardedOnlyWhenTrusted(t *testing.T) {
 		t.Fatalf("IPs %q and %q", evs[0].IP, evs[1].IP)
 	}
 }
+
+type panickingChain struct{ chain.Unconfigured }
+
+func (panickingChain) Record(context.Context, chain.Event) error { panic("chain bug") }
+
+// Review, Important #4: a panic while recording never reaches the request.
+func TestRecordingPanicsDoNotEscape(t *testing.T) {
+	var logs bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&logs, nil))
+	for name, o := range map[string]httpmw.Options{
+		"chain": {Chain: panickingChain{}, Actor: actorFromHeaders, Logger: log},
+		"actor": {Actor: func(*http.Request) (httpmw.Actor, bool) { panic("actor bug") }, Logger: log},
+		"route": {Actor: actorFromHeaders, Route: func(*http.Request) string { panic("route bug") }, Logger: log},
+	} {
+		func() {
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("%s: the panic escaped: %v", name, p)
+				}
+			}()
+			rec := serve(t, o, staffPost("/items/7", ""))
+			if rec.Code != http.StatusCreated || rec.Body.String() != "made" {
+				t.Errorf("%s: response %d %q", name, rec.Code, rec.Body)
+			}
+		}()
+	}
+	if n := strings.Count(logs.String(), "level=ERROR"); n != 3 {
+		t.Fatalf("%d error lines, want one per panic:\n%s", n, logs.String())
+	}
+}
+
+// The handler's own panics still propagate, so the server's recovery sees them.
+func TestHandlerPanicsStillPropagate(t *testing.T) {
+	h := httpmw.New(httpmw.Options{Actor: actorFromHeaders})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic(http.ErrAbortHandler)
+	}))
+	defer func() {
+		p := recover()
+		if err, ok := p.(error); !ok || !errors.Is(err, http.ErrAbortHandler) {
+			t.Fatalf("recovered %v, want http.ErrAbortHandler", p)
+		}
+	}()
+	h.ServeHTTP(httptest.NewRecorder(), staffPost("/x", ""))
+}
