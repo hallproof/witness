@@ -60,6 +60,11 @@ type Options struct {
 	// OwnerKey is the key metadata entry sent as each key's owner_id.
 	// Empty means DefaultOwnerKey. No other metadata is sent.
 	OwnerKey string `json:"owner_key"`
+	// AliasModelsOnly limits nexus.models-in-use to the models your
+	// gateway's aliases name as targets. Callers can ask for any model
+	// name, so without it a host whose tenants reach their own endpoints
+	// can send model names a customer chose.
+	AliasModelsOnly bool `json:"alias_models_only"`
 }
 
 // Option changes an adapter's Options.
@@ -77,6 +82,10 @@ func WithAllTenants() Option { return func(o *Options) { o.AllTenants = true } }
 
 // WithOwnerKey sets the key metadata entry sent as each key's owner_id.
 func WithOwnerKey(k string) Option { return func(o *Options) { o.OwnerKey = k } }
+
+// WithAliasModelsOnly limits nexus.models-in-use to the models your
+// gateway's aliases name as targets.
+func WithAliasModelsOnly() Option { return func(o *Options) { o.AliasModelsOnly = true } }
 
 // Adapter collects Nexus evidence from one gateway.
 type Adapter struct {
@@ -148,10 +157,17 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot) {
 		Every:       time.Hour,
 		Collect:     a.collectGateway,
 	}}
+	models := "Each provider and model pair a provider answered in the last 30 days, across the whole gateway. " +
+		"Candidates come from this calendar month's and the last 7 days' usage and the alias targets, " +
+		"so a model last used before the 1st, more than 7 days ago and named in no alias is missing."
+	if a.o.AliasModelsOnly {
+		models = "Each provider and model pair a provider answered in the last 30 days, across the whole gateway, " +
+			"checked only for the models the gateway's aliases name as targets."
+	}
 	pops := []collect.Population{{
 		Key:         KeyModelsInUse,
 		Title:       "AI models in use",
-		Description: "Each provider and model the gateway actually called in the last month.",
+		Description: models,
 		Source:      "nexus-models",
 		Every:       6 * time.Hour,
 		Collect:     a.collectModelsInUse,

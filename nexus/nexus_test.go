@@ -438,6 +438,39 @@ func TestModelsInUseQueryBudget(t *testing.T) {
 	}
 }
 
+func TestModelsInUseAliasModelsOnly(t *testing.T) {
+	f := newFixture(t,
+		nx.WithProvider(&fakeProvider{t: t, name: "openai"}),
+		nx.WithAlias("fast", model.AliasTarget{Provider: "openai", Model: "gpt-5"}),
+	)
+	cust := f.addTenant(t, &tenant.Tenant{Slug: "customer"})
+	f.addUsage(t, &usage.Record{Provider: "openai", Model: "gpt-5"})
+	// A model a customer asked for by its own name, such as a fine-tune.
+	f.addUsage(t, &usage.Record{TenantID: cust.ID, Provider: "openai", Model: "ft:acme-support-bot"})
+
+	if got := ids(items(t, New(f.gw), KeyModelsInUse)); !slices.Equal(got, []string{"openai/ft:acme-support-bot", "openai/gpt-5"}) {
+		t.Fatalf("by default got %v", got)
+	}
+	want := []string{"openai/gpt-5"}
+	if got := ids(items(t, New(f.gw, WithAliasModelsOnly()), KeyModelsInUse)); !slices.Equal(got, want) {
+		t.Fatalf("with WithAliasModelsOnly got %v, want %v", got, want)
+	}
+	var o Options
+	if err := adapter.Decode(map[string]any{"alias_models_only": true}, &o); err != nil {
+		t.Fatal(err)
+	}
+	if got := ids(items(t, newAdapter(f.gw, o), KeyModelsInUse)); !slices.Equal(got, want) {
+		t.Fatalf("with alias_models_only got %v, want %v", got, want)
+	}
+}
+
+func TestModelsInUseSaysWhatItMisses(t *testing.T) {
+	d := collectorsOf(t, New(newFixture(t).gw)).pops[KeyModelsInUse].Description
+	if strings.Contains(d, "last month") || !strings.Contains(d, "30 days") || !strings.Contains(d, "calendar month") {
+		t.Fatalf("Description = %q, want the 30 day window and the calendar month gap", d)
+	}
+}
+
 func TestKeys(t *testing.T) {
 	f := newFixture(t)
 	staff := f.addTenant(t, &tenant.Tenant{Slug: "staff"})

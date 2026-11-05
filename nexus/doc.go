@@ -26,6 +26,22 @@
 // subprocessors: with bring-your-own-key, a customer's own OpenAI account is
 // their processor, not yours, and the provider name looks the same.
 //
+// Model names go as callers asked for them (or as an alias resolved them).
+// If your tenants can reach their own endpoints, a customer can pick any
+// model ID, such as the name of their own fine-tune, and that name is sent.
+// Set AliasModelsOnly (config alias_models_only) to check only the models
+// your gateway's aliases name as targets. A model called by its own name
+// and named in no alias is then left out, even when you chose it.
+//
+// The list can miss a model, too. Nexus has no read for "every model used
+// since a time", so candidates come from this calendar month's usage
+// summary, the last 7 days' summary and the alias targets. A model last
+// used before the 1st of this month, more than 7 days ago and named in no
+// alias drops out of the list even though its 30 days aren't up. Used on
+// the last day of a month, it drops out on the 8th of the next, about three
+// weeks early. With AliasModelsOnly every candidate is an alias target, so
+// this gap doesn't apply.
+//
 // nexus.keys is a population of the Nexus API keys in scope, every 15
 // minutes, for the keys-rotated test: ID, tenant, name, scopes, effective
 // status (an active key past its expiry reads expired), created_at (also the
@@ -83,9 +99,10 @@
 //	tenants: [platform]   # tenant IDs or slugs whose keys and budgets you send
 //	all_tenants: false
 //	owner_key: owner_id   # key metadata entry sent as owner_id
+//	alias_models_only: false  # models in use: alias targets only
 //
-// Outside Forge the same settings are WithTenants, WithAllTenants and
-// WithOwnerKey.
+// Outside Forge the same settings are WithTenants, WithAllTenants,
+// WithOwnerKey and WithAliasModelsOnly.
 //
 // # Using it
 //
@@ -115,9 +132,10 @@
 //     make it one query.
 //   - The "month" usage summary is the calendar month. The adapter adds the
 //     last week's summary and the alias targets to its candidates, but a
-//     model used only in the last calendar month, more than a week ago and
-//     not named in an alias, drops out of the list a few days before its 30
-//     days are up.
+//     model last used before the 1st, more than a week ago and not named in
+//     an alias drops out of the list up to about three weeks before its 30
+//     days are up (see nexus.models-in-use above). A rolling 30 day summary
+//     would close the gap.
 //   - The stream guard strategy set with WithStreamGuardStrategy has no
 //     getter, so it isn't in nexus.gateway. Gateway.StreamGuardStrategy()
 //     next to RoutingStrategy() would fix that.

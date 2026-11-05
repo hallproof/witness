@@ -98,10 +98,11 @@ func (a *Adapter) collectGateway(context.Context) (map[string]any, error) {
 
 // collectModelsInUse lists the provider and model pairs a provider answered
 // in the last 30 days, across every tenant. Nexus has no read for those
-// pairs, so the adapter gathers candidate model names (this month's and the
-// last week's usage summaries, and the alias targets), then confirms each
-// with a one-row query: first by model, which finds one provider for it,
-// then by each other candidate provider.
+// pairs, so the adapter gathers candidate model names (this calendar
+// month's and the last week's usage summaries, and the alias targets), then
+// confirms each with a one-row query: first by model, which finds one
+// provider for it, then by each other candidate provider. With
+// AliasModelsOnly the alias targets are the only candidate models.
 func (a *Adapter) collectModelsInUse(ctx context.Context) ([]map[string]any, error) {
 	us := a.gw.Usage()
 	if us == nil {
@@ -116,8 +117,12 @@ func (a *Adapter) collectModelsInUse(ctx context.Context) ([]map[string]any, err
 		if s == nil {
 			continue
 		}
-		for m := range s.ByModel {
-			models[m] = true
+		if !a.o.AliasModelsOnly {
+			// Model names as callers asked for them, which a tenant that
+			// reaches its own endpoint can choose.
+			for m := range s.ByModel {
+				models[m] = true
+			}
 		}
 		for p := range s.ByProvider {
 			providers[p] = true
