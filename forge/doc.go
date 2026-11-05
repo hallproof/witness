@@ -79,8 +79,11 @@
 // Chain adapters attach first, so the chain is bound before the rest attach.
 // An adapter whose library isn't in the container is skipped and logged. One
 // that returns an error, or panics, is logged and skipped too, and witness
-// still starts with the others. Collectors an adapter added before it failed
-// stay registered.
+// still starts with the others. The adapters in this module's repository
+// register their collectors through adapter.Set, all of them or none, so
+// one that fails part-way leaves nothing behind. An adapter of your own
+// should do the same: one that adds collectors one at a time and fails
+// keeps the ones it added.
 //
 // # The chain
 //
