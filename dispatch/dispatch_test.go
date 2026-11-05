@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -734,3 +736,132 @@ func assertJSON(t *testing.T, got, want any) {
 		t.Fatalf("got  %s\nwant %s", g, w)
 	}
 }
+
+// dispatchExt stands in for dispatch's Forge extension: it hands out the
+// engine it built and started through its Engine getter.
+type dispatchExt struct{ eng *engine.Engine }
+
+func (x dispatchExt) Engine() *engine.Engine { return x.eng }
+
+// extensions is a host's Extension func over the given extensions.
+func extensions(byName map[string]any) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		x, ok := byName[name]
+		return x, ok
+	}
+}
+
+// This is how dispatch's own Forge extension registers its engine: with a
+// constructor, which vessel calls on the first Inject and then starts what
+// it returns. The extension has already started that engine, so reading it
+// from the container would start its workers, cron scheduler and listener
+// a second time, and the app's shutdown would hang. vessel starts a value
+// only right after its constructor builds it, so a constructor that never
+// runs means nothing was started. Attach must read the engine through the
+// extension and never touch the container.
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = f.eng.Stop(ctx)
+	})
+	f.addCron(t, &cron.Entry{Name: "nightly-backup", Schedule: "0 3 * * *", JobName: "db.backup", Enabled: true})
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*engine.Engine, error) {
+		built.Add(1)
+		return f.eng, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{
+		Witness:   w,
+		Container: c,
+		Config:    map[string]any{"backup_jobs": []any{"db.backup"}},
+		Extension: extensions(map[string]any{"dispatch": dispatchExt{eng: f.eng}}),
+	})
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the engine %d times; attach must read it through the extension", n)
+	}
+	for _, k := range []string{KeyScheduledJobs, KeyJobRuns, KeyBackupRuns} {
+		if !taken(t, w, k) {
+			t.Errorf("%s was not registered", k)
+		}
+	}
+	// The collectors read the extension's engine.
+	a, found, err := fromHost(adapter.Host{Container: c, Extension: extensions(map[string]any{"dispatch": dispatchExt{eng: f.eng}})})
+	if !found || err != nil {
+		t.Fatalf("fromHost = %v, %v", found, err)
+	}
+	a.now = func() time.Time { return now }
+	if got := ids(run(t, a, KeyScheduledJobs)); !slices.Equal(got, []string{"nightly-backup"}) {
+		t.Fatalf("scheduled ids = %v", got)
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the engine %d times", n)
+	}
+}
+
+// An extension that hasn't built its engine yet means dispatch isn't
+// ready: attach reports it absent and doesn't fall back to the container,
+// which would build and start an engine of its own.
+func TestAttachExtensionWithoutEngine(t *testing.T) {
+	f := newFixture(t)
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*engine.Engine, error) {
+		built.Add(1)
+		return f.eng, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for name, x := range map[string]any{
+		"nil engine":   dispatchExt{},
+		"other getter": struct{}{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			w := newWitness(t)
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: w, Container: c, Logger: quietLogger(),
+				Extension: extensions(map[string]any{"dispatch": x}),
+			})
+			if found || err != nil {
+				t.Fatalf("attach = %v, %v; want false, nil", found, err)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built the engine %d times", n)
+			}
+			if taken(t, w, KeyScheduledJobs) {
+				t.Fatal("collectors were registered")
+			}
+		})
+	}
+}
+
+// An app that runs no dispatch extension but provides its finished engine
+// is still found through the container.
+func TestAttachFallsBackToTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.eng); err != nil {
+		t.Fatal(err)
+	}
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{
+		Witness: w, Container: c,
+		Extension: extensions(map[string]any{"grove": struct{}{}}),
+	})
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	if !taken(t, w, KeyScheduledJobs) {
+		t.Fatal("collectors were not registered")
+	}
+}
+
+func quietLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }

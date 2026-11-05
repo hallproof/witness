@@ -271,37 +271,29 @@ func init() {
 	})
 }
 
-// attach finds *engine.Engine in the host's container and registers the
-// collectors.
+// attach finds the app's dispatch engine, through dispatch's extension or
+// else the container, and registers the collectors.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
 	a, found, err := fromHost(h)
 	if !found || err != nil {
 		return found, err
 	}
 	if len(a.backups) == 0 {
-		log := h.Logger
-		if log == nil {
-			log = slog.Default()
-		}
-		log.Info("witness: dispatch found, but no backup_jobs are set, so dispatch.backup-runs is off")
+		logger(h).Info("witness: dispatch found, but no backup_jobs are set, so dispatch.backup-runs is off")
 	}
 	return true, a.Register(h.Witness)
 }
 
-// fromHost builds the adapter for the engine in h's container, and tells
-// the host when the adapter's own all_tenants takes it past staff.
+// fromHost builds the adapter for the app's dispatch engine, and tells the
+// host when the adapter's own all_tenants takes it past staff.
 func fromHost(h adapter.Host) (*Adapter, bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*engine.Engine](c) {
-		return nil, false, nil
+	eng, found, err := findEngine(h)
+	if !found || err != nil {
+		return nil, found, err
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return nil, true, err
-	}
-	eng, err := vessel.Inject[*engine.Engine](c)
-	if err != nil {
-		return nil, true, fmt.Errorf("witness/dispatch: resolve the engine: %w", err)
 	}
 	if o.AllTenants {
 		// The adapter's own config takes it past staff. The host already
@@ -313,4 +305,50 @@ func fromHost(h adapter.Host) (*Adapter, bool, error) {
 		o.AppID = h.Scope.AppID
 	}
 	return newAdapter(eng, o), true, nil
+}
+
+// extensionName is the name dispatch's own Forge extension registers under.
+const extensionName = "dispatch"
+
+// engineGetter is dispatch's Forge extension, read through its getter, so
+// the adapter needn't import the extension package.
+type engineGetter interface{ Engine() *engine.Engine }
+
+// findEngine returns the app's dispatch engine. It asks dispatch's own
+// extension first: the extension registers its engine in the container
+// with a constructor, and the container starts whatever a constructor
+// returns the first time anyone asks for it, so reading it there would
+// start the extension's already running engine a second time. Only an app
+// that doesn't run the extension is looked up in the container, where it
+// should have provided its finished engine.
+func findEngine(h adapter.Host) (*engine.Engine, bool, error) {
+	if x, ok := h.Ext(extensionName); ok {
+		g, ok := x.(engineGetter)
+		if !ok {
+			logger(h).Warn("witness: the dispatch extension has no Engine getter, so dispatch is skipped", "type", fmt.Sprintf("%T", x))
+			return nil, false, nil
+		}
+		eng := g.Engine()
+		if eng == nil {
+			logger(h).Warn("witness: the dispatch extension has no engine yet, so dispatch is skipped")
+			return nil, false, nil
+		}
+		return eng, true, nil
+	}
+	c, ok := h.Container.(vessel.Vessel)
+	if !ok || c == nil || !vessel.HasType[*engine.Engine](c) {
+		return nil, false, nil
+	}
+	eng, err := vessel.Inject[*engine.Engine](c)
+	if err != nil {
+		return nil, true, fmt.Errorf("witness/dispatch: resolve the engine: %w", err)
+	}
+	return eng, true, nil
+}
+
+func logger(h adapter.Host) *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
 }

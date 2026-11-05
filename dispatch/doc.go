@@ -105,11 +105,23 @@
 //
 // # Using it
 //
-// With Forge, import the package for its side effect, and the witness
-// extension finds *engine.Engine in the container. Dispatch's own Forge
-// extension provides it.
+// With Forge, import the package for its side effect:
 //
 //	import _ "github.com/hallproof/witness/dispatch"
+//
+// The adapter reads the engine through dispatch's own Forge extension (named
+// "dispatch") and its Engine getter. It never asks the container for the
+// engine when that extension runs, because the extension registers its engine
+// with a constructor, and the container starts whatever a constructor builds
+// the first time anyone asks for it. Reading it there would start a second
+// worker pool, cron scheduler and listener on an engine that's already
+// running, and your app's shutdown would hang. If the extension is there but
+// hasn't built its engine, the adapter logs it and reports dispatch absent.
+//
+// Only when your app doesn't run dispatch's extension does the adapter look
+// for *engine.Engine in the container. If you build the engine yourself,
+// provide the finished value there (vessel.ProvideValue or
+// forge.ProvideValue), not a constructor.
 //
 // Without Forge, build the adapter and register it before you start
 // witness:
