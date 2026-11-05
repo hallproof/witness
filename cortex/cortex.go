@@ -304,20 +304,29 @@ func init() {
 	})
 }
 
-// attach finds *engine.Engine in the host's container and registers the
-// collectors. With no org set it logs why and registers nothing.
+// extensionName is the name cortex's Forge extension registers under.
+const extensionName = "cortex"
+
+// engineGetter is the one method of cortex's Forge extension the adapter
+// uses. A structural interface keeps the extension module out of the
+// adapter's dependencies.
+type engineGetter interface{ Engine() *engine.Engine }
+
+// attach registers the collectors. It looks for cortex first and decides
+// from config alone whether there is anything to collect, so with no org
+// it logs why and returns without touching the engine. Only then does it
+// read the engine, through cortex's extension when the app runs it and
+// from the container otherwise.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*engine.Engine](c) {
+	ext, hasExt := h.Ext(extensionName)
+	c, isVessel := h.Container.(vessel.Vessel)
+	inContainer := isVessel && c != nil && vessel.HasType[*engine.Engine](c)
+	if !hasExt && !inContainer {
 		return false, nil
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return true, err
-	}
-	eng, err := vessel.Inject[*engine.Engine](c)
-	if err != nil {
-		return true, fmt.Errorf("witness/cortex: resolve the engine: %w", err)
 	}
 	log := h.Logger
 	if log == nil {
@@ -326,10 +335,33 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if h.Scope.AllTenants {
 		log.Warn("witness: cortex can't list agents across scopes, so all_tenants reads only the orgs named in org and orgs")
 	}
-	err = newAdapter(eng, o).Register(h.Witness)
-	if errors.Is(err, ErrNoOrg) {
+	a := newAdapter(nil, o)
+	if a.scopeErr != nil {
+		return true, a.scopeErr
+	}
+	if len(a.scopes) == 0 {
 		log.Warn("witness: cortex found, but no org is set, so no agents are collected")
 		return true, nil
 	}
-	return true, err
+	var eng *engine.Engine
+	if hasExt {
+		g, ok := ext.(engineGetter)
+		if !ok {
+			log.Warn("witness: the cortex extension has no Engine getter, so cortex is skipped", "type", fmt.Sprintf("%T", ext))
+			return false, nil
+		}
+		if eng = g.Engine(); eng == nil {
+			log.Warn("witness: the cortex extension has no engine yet, so cortex is skipped")
+			return false, nil
+		}
+	} else {
+		// The app doesn't run cortex's extension and provided the engine
+		// itself. A finished value is never started again.
+		var err error
+		if eng, err = vessel.Inject[*engine.Engine](c); err != nil {
+			return true, fmt.Errorf("witness/cortex: resolve the engine: %w", err)
+		}
+	}
+	a.eng = eng
+	return true, a.Register(h.Witness)
 }

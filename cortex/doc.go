@@ -90,13 +90,21 @@
 //
 // # Using it
 //
-// With Forge, import the package for its side effect, and the witness
-// extension finds *engine.Engine in the container:
+// With Forge, import the package for its side effect:
 //
 //	import _ "github.com/hallproof/witness/cortex"
 //
-// Cortex's own Forge extension provides the engine. If you build it
-// yourself, provide it with forge.ProvideValue(c, eng).
+// The witness extension reads config first. With no org or scope set there
+// is nothing to collect, so the adapter logs a warning and never touches
+// the engine. Otherwise it reads the engine through cortex's own Forge
+// extension ("cortex", its Engine method), which already built and started
+// it. If that extension is running but has no engine yet, cortex counts as
+// not found and the adapter logs why. Only when your app doesn't run
+// cortex's extension does the adapter look for *engine.Engine in the
+// container. If you build the engine yourself, provide the finished value
+// with forge.ProvideValue(c, eng), not a constructor: a container starts a
+// value it builds from a constructor, and an engine started twice runs
+// everything twice.
 //
 // Without Forge, build the adapter and register it before you start
 // witness:
