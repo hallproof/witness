@@ -72,7 +72,14 @@ type run struct {
 	msg  *push.Message // the message to push, if any
 	hash string        // the content hash to remember
 	from string        // event proofs: the checkpoint reached, if it moved
+	// proofs are event proof messages, each for a checkpoint not proven
+	// before, so each is pushed as it is.
+	proofs []push.Message
 }
+
+// maxProofsPerRun bounds how many checkpoints one event proof run proves,
+// so a long backlog is worked through over several runs.
+const maxProofsPerRun = 20
 
 // Scheduler runs collectors and pushes what they find.
 type Scheduler struct {
@@ -194,9 +201,16 @@ var errSkip = errors.New("witness: nothing to do")
 
 // AddEventProof registers an event proof collector. It proves nothing
 // until the scheduler has a chain.
+//
+// Each run proves every checkpoint sealed since the last one it proved, up
+// to maxProofsPerRun, and pushes a message for each proof that cites
+// something.
 func (s *Scheduler) AddEventProof(e EventProof) error {
 	if e.Stream == "" {
 		return fmt.Errorf("witness: event proof collector %q needs a stream", e.Key)
+	}
+	if len(e.Actions) == 0 {
+		return fmt.Errorf("witness: event proof collector %q needs at least one action to cite", e.Key)
 	}
 	return s.add(e.Key, e.Title, e.Every, &collector{
 		kind: push.KindEventProof,
@@ -204,24 +218,41 @@ func (s *Scheduler) AddEventProof(e EventProof) error {
 			s.mu.Lock()
 			from, last := c.from, c.lastHash
 			s.mu.Unlock()
-			proof, err := s.chain.Prove(ctx, chain.ProofRequest{Stream: e.Stream, From: from, Actions: e.Actions})
-			switch {
-			case errors.Is(err, chain.ErrNoChain):
-				return run{}, errSkip
-			case errors.Is(err, chain.ErrNothingNew):
-				return run{hash: last}, nil
-			case err != nil:
-				return run{}, err
-			case proof == nil || proof.Checkpoint.ID == "":
-				return run{}, errors.New("witness: the chain returned a proof without a checkpoint")
+			r := run{hash: last}
+			for range maxProofsPerRun {
+				proof, err := s.chain.Prove(ctx, chain.ProofRequest{Stream: e.Stream, From: from, Actions: e.Actions})
+				switch {
+				case errors.Is(err, chain.ErrNoChain):
+					if r.from == "" {
+						return run{}, errSkip
+					}
+					return r, nil
+				case errors.Is(err, chain.ErrNothingNew):
+					return r, nil
+				case err != nil:
+					// Keep what was proven; the next run meets the error
+					// again and reports it.
+					if r.from != "" {
+						return r, nil
+					}
+					return run{}, err
+				case proof == nil || proof.Checkpoint.ID == "":
+					if r.from != "" {
+						return r, nil
+					}
+					return run{}, errors.New("witness: the chain returned a proof without a checkpoint")
+				}
+				if len(proof.Cited) > 0 {
+					m, err := ProofMessage(e, proof, now)
+					if err != nil {
+						return run{}, err
+					}
+					r.proofs = append(r.proofs, m)
+				}
+				from = proof.Checkpoint.ID
+				r.hash, r.from = proof.Checkpoint.ToHash, from
 			}
-			r := run{hash: proof.Checkpoint.ToHash, from: proof.Checkpoint.ID}
-			if len(proof.Cited) == 0 {
-				return r, nil
-			}
-			m, err := ProofMessage(e, proof, now)
-			r.msg = &m
-			return r, err
+			return r, nil
 		},
 	})
 }
@@ -363,6 +394,9 @@ func (s *Scheduler) runOnce(ctx context.Context, key string) {
 	s.mu.Unlock()
 	if changed {
 		s.send.Enqueue(*out.r.msg)
+	}
+	for _, m := range out.r.proofs {
+		s.send.Enqueue(m)
 	}
 }
 
