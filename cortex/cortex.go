@@ -356,7 +356,8 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		}
 	} else {
 		// The app doesn't run cortex's extension and provided the engine
-		// itself. A finished value is never started again.
+		// itself. Reading a provided value doesn't start it; only a
+		// constructor registration would be built and started here.
 		var err error
 		if eng, err = vessel.Inject[*engine.Engine](c); err != nil {
 			return true, fmt.Errorf("witness/cortex: resolve the engine: %w", err)

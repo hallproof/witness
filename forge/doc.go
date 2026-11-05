@@ -101,6 +101,10 @@
 //
 // So if your app builds an engine itself and wants witness to find it,
 // provide the finished value (forge.ProvideValue), not a constructor.
+// Witness reads a provided value without starting it. The container itself
+// still calls Start once on a provided value that has a Start method when the
+// container starts, though, so either let the container start it or start it
+// yourself and make sure a second Start is harmless, never both.
 //
 // # Reaching the witness from your own code
 //
