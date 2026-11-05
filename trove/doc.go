@@ -60,11 +60,23 @@
 //
 //	import _ "github.com/hallproof/witness/trove"
 //
-// The adapter looks in the container for the Trove extension's
-// *extension.TroveManager and reads every store it holds, metadata stores
-// included. With no manager it falls back to a lone *trove.Trove, read as
-// one store called "default". In that single-store mode the extension keeps
-// its metadata store out of the container, so trove.buckets is skipped.
+// The adapter reads Trove through the Trove extension (named "trove") and
+// its getters. In multi-store mode that's the extension's Manager, and the
+// adapter reads every store it holds, metadata stores included. In
+// single-store mode it's the extension's Trove, read as one store called
+// "default", and its Store, the metadata store behind trove.buckets. The
+// adapter doesn't ask the container for them when the extension runs,
+// because the extension registers them there with constructors, and the
+// container starts whatever a constructor builds the first time anyone asks
+// for it. If the extension is there but has no store yet, the adapter logs
+// it and does nothing.
+//
+// Only when your app doesn't run the Trove extension does the adapter look
+// in the container: for an *extension.TroveManager, else a lone
+// *trove.Trove, read as one store called "default". A lone store found
+// there has no metadata store, so trove.buckets is skipped. If you build
+// these yourself, provide the finished values (vessel.ProvideValue or
+// forge.ProvideValue), not constructors.
 //
 // # Without Forge
 //
@@ -105,7 +117,6 @@
 //   - The coverage check is unexported in Trove's dashboard code, so this
 //     package keeps its own copy. An exported Resolver.Coverage in root
 //     Trove would stop the two drifting apart.
-//   - In single-store mode the metadata store isn't in the container.
 //   - The driver-level bucket listing needs account-wide permission on S3,
 //     so the adapter reads only each store's default bucket.
 package trove

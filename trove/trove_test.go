@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	xtrove "github.com/xraph/trove"
 	"github.com/xraph/trove/cas"
 	"github.com/xraph/trove/drivers/memdriver"
+	"github.com/xraph/trove/extension"
 	"github.com/xraph/trove/extension/model"
 	"github.com/xraph/trove/extension/store"
 	"github.com/xraph/trove/middleware"
@@ -496,3 +499,111 @@ func TestNeverSendsContent(t *testing.T) {
 		}
 	}
 }
+
+// troveExt stands in for Trove's Forge extension and its getters: Manager
+// in multi-store mode, Trove and Store in single-store mode.
+type troveExt struct {
+	mgr  *extension.TroveManager
+	tr   *xtrove.Trove
+	meta store.Store
+}
+
+func (x troveExt) Manager() *extension.TroveManager { return x.mgr }
+func (x troveExt) Trove() *xtrove.Trove             { return x.tr }
+func (x troveExt) Store() store.Store               { return x.meta }
+
+func extensions(byName map[string]any) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		x, ok := byName[name]
+		return x, ok
+	}
+}
+
+// countingContainer registers m and tr the way Trove's extension does,
+// with constructors, and counts how often the container calls them.
+func countingContainer(t *testing.T, m *extension.TroveManager, tr *xtrove.Trove) (vessel.Vessel, *atomic.Int32) {
+	t.Helper()
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() *extension.TroveManager {
+		built.Add(1)
+		return m
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vessel.Provide(c, func() (*xtrove.Trove, error) {
+		built.Add(1)
+		return tr, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, &built
+}
+
+// Trove's extension registers its manager and store with constructors, and
+// the container starts what a constructor builds the first time anyone
+// asks. Attach reads them through the extension's getters instead. In
+// single-store mode that also reaches the metadata store, which the
+// extension keeps out of the container.
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	meta := newMeta()
+	tr := open(t, memdriver.New(), xtrove.WithDefaultBucket("loomplane-artifacts"))
+	m := manager(t, "artifacts", map[string]*xtrove.Trove{"artifacts": tr}, map[string]store.Store{"artifacts": meta})
+	for name, x := range map[string]troveExt{
+		"manager":      {mgr: m},
+		"single store": {tr: tr, meta: meta},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c, built := countingContainer(t, m, tr)
+			w := newWitness(t)
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: w, Container: c,
+				Extension: extensions(map[string]any{"trove": x}),
+			})
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v; want true, nil", found, err)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built a store %d times; attach must read it through the extension", n)
+			}
+			for _, key := range []string{KeyStores, KeyBuckets} {
+				if !taken(t, w, key) {
+					t.Errorf("%s is not registered", key)
+				}
+			}
+		})
+	}
+}
+
+// An extension with no store yet means Trove isn't ready: attach reports it
+// absent and doesn't fall back to the container.
+func TestAttachExtensionWithoutStore(t *testing.T) {
+	tr := open(t, memdriver.New())
+	m := manager(t, "files", map[string]*xtrove.Trove{"files": tr}, nil)
+	c, built := countingContainer(t, m, tr)
+	for name, x := range map[string]any{"no store": troveExt{}, "other getter": struct{}{}} {
+		t.Run(name, func(t *testing.T) {
+			w := newWitness(t)
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: w, Container: c, Logger: slog.New(slog.DiscardHandler),
+				Extension: extensions(map[string]any{"trove": x}),
+			})
+			if found || err != nil {
+				t.Fatalf("attach = %v, %v; want false, nil", found, err)
+			}
+			if n := built.Load(); n != 0 {
+				t.Fatalf("the container built a store %d times", n)
+			}
+			if taken(t, w, KeyStores) {
+				t.Fatal("collectors were registered")
+			}
+		})
+	}
+}
+
+// Trove's real extension has the getters the adapter reads.
+var (
+	_ managerGetter = (*extension.Extension)(nil)
+	_ troveGetter   = (*extension.Extension)(nil)
+	_ storeGetter   = (*extension.Extension)(nil)
+)

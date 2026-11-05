@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	xtrove "github.com/xraph/trove"
@@ -219,10 +220,69 @@ func options(h adapter.Host) (Options, error) {
 	return o, nil
 }
 
-// attach finds Trove in the host's container: the extension's
-// *extension.TroveManager when it runs several stores, else a lone
-// *trove.Trove, read as one store named "default".
+// attach finds Trove, through Trove's own extension or else the container,
+// and registers the collectors.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
+	if x, ok := h.Ext(extension.ExtensionName); ok {
+		return attachExtension(h, x)
+	}
+	return attachContainer(h)
+}
+
+// Trove's Forge extension, read through its getters.
+type (
+	managerGetter interface {
+		Manager() *extension.TroveManager
+	}
+	troveGetter interface{ Trove() *xtrove.Trove }
+	storeGetter interface{ Store() store.Store }
+)
+
+// attachExtension reads Trove through its extension x: every store its
+// manager holds, or else its lone store and that store's metadata store. It
+// never asks the container, where the extension registers them with
+// constructors, because the container starts whatever a constructor builds
+// the first time anyone asks for it.
+func attachExtension(h adapter.Host, x any) (bool, error) {
+	var (
+		m    *extension.TroveManager
+		t    *xtrove.Trove
+		meta store.Store
+	)
+	if g, ok := x.(managerGetter); ok {
+		m = g.Manager()
+	}
+	if m == nil {
+		if g, ok := x.(troveGetter); ok {
+			t = g.Trove()
+		}
+		if g, ok := x.(storeGetter); ok {
+			meta = g.Store()
+		}
+	}
+	if m == nil && t == nil {
+		log := h.Logger
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Warn("witness: the trove extension has no store yet, so trove is skipped", "type", fmt.Sprintf("%T", x))
+		return false, nil
+	}
+	o, err := options(h)
+	if err != nil {
+		return true, err
+	}
+	if m != nil {
+		return true, newManager(m, o).Register(h.Witness)
+	}
+	return true, newSingle(t, meta, o).Register(h.Witness)
+}
+
+// attachContainer finds Trove in the host's container, for an app that
+// doesn't run Trove's extension: an *extension.TroveManager when it runs
+// several stores, else a lone *trove.Trove, read as one store named
+// "default".
+func attachContainer(h adapter.Host) (bool, error) {
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil {
 		return false, nil
