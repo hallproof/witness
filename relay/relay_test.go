@@ -686,3 +686,49 @@ func assertJSON(t *testing.T, got, want any) {
 		t.Fatalf("got  %s\nwant %s", gj, wj)
 	}
 }
+
+func TestAttachReportsWidening(t *testing.T) {
+	f := newFixture(t)
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.r); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		cfg   map[string]any
+		scope bool
+		want  []string
+	}{
+		"staff tenants":          {map[string]any{"staff_tenants": []any{staff}}, false, nil},
+		"host scope all tenants": {nil, true, nil},
+		"all tenants":            {map[string]any{"all_tenants": true}, false, []string{"all_tenants"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []string
+			found, err := attach(context.Background(), adapter.Host{
+				Witness:   newWitness(t),
+				Scope:     adapter.Scope{AllTenants: tc.scope},
+				Container: c,
+				Config:    tc.cfg,
+				Widen:     func(r string) { got = append(got, r) },
+			})
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v", found, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("Widen got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWidenedDescriptions(t *testing.T) {
+	f := newFixture(t)
+	wide := collectorsOf(t, New(f.r, WithAllTenants())).pops[KeyEndpoints].Description
+	if !strings.Contains(wide, "every tenant, customers included") {
+		t.Errorf("endpoints with all_tenants: %q", wide)
+	}
+	narrow := collectorsOf(t, New(f.r, WithStaffTenants(staff))).pops[KeyEndpoints].Description
+	if strings.Contains(narrow, "customers") {
+		t.Errorf("endpoints by default: %q", narrow)
+	}
+}

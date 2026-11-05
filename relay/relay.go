@@ -186,6 +186,14 @@ func (a *Adapter) Register(w *witness.Witness) error {
 
 func (a *Adapter) endpointsInScope() bool { return a.o.AllTenants || len(a.tenants) > 0 }
 
+// where says, in a collector description, which tenants it reads.
+func (a *Adapter) where() string {
+	if a.o.AllTenants {
+		return "every tenant, customers included"
+	}
+	return "the staff tenants"
+}
+
 func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, error) {
 	if a.eps == nil {
 		return nil, nil, errors.New("witness/relay: no endpoint store")
@@ -196,7 +204,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, error)
 		pops = append(pops, collect.Population{
 			Key:         KeyEndpoints,
 			Title:       "Webhook destinations",
-			Description: "Every webhook endpoint in scope, with where it sends data, whether deliveries are signed and which events it receives.",
+			Description: "Every webhook endpoint in " + a.where() + ", with where it sends data, whether deliveries are signed and which events it receives.",
 			Source:      "webhook-endpoints",
 			Tests:       append([]string(nil), Tests...),
 			Every:       30 * time.Minute,
@@ -249,6 +257,8 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return true, err
 	}
+	// The host reports its own all-tenants scope; this is the adapter's.
+	own := o.AllTenants
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	o.log = h.Logger
 	a, err := resolve(c, o)
@@ -260,7 +270,13 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		a.log.Warn("witness: relay found, but no staff_tenants are set and the posture snapshot is off, so nothing is collected")
 		return true, nil
 	}
-	return true, err
+	if err != nil {
+		return true, err
+	}
+	if own {
+		h.Widened("all_tenants")
+	}
+	return true, nil
 }
 
 // resolve builds the adapter from a container. A bare endpoint.Store

@@ -99,7 +99,9 @@
 // AllTenants (config all_tenants, or the witness scope's AllTenants) lists
 // every tenant's endpoints, with their tenant IDs and hosts. Paths,
 // queries, header values and secrets stay out even then. Hallproof shows
-// that the scope was widened.
+// that the scope was widened: the endpoints description says every tenant,
+// and when the adapter's own all_tenants is on it tells the witness so.
+// The host reports its own scope.
 //
 // Lists are read 500 rows a page. A scope holding more than push.MaxItems
 // endpoints or event types fails the run with ErrTooMany, and the
