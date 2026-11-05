@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math"
 	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"time"
 
 	sh "github.com/xraph/shield"
@@ -592,22 +594,46 @@ func reportItem(r *compliance.Report) map[string]any {
 	}
 }
 
-// figures keeps the top-level numbers and booleans of a report summary.
-// Strings and nested values are dropped, since a host can put anything
-// there.
+// figureKey is the form a summary key must take to be sent. A host picks
+// the keys, so a key outside it could carry content, such as a customer's
+// name.
+var figureKey = regexp.MustCompile(`^[a-z0-9_]{1,64}$`)
+
+// figures keeps the top-level numbers and booleans of a report summary
+// whose keys are plain lowercase names. Strings and nested values are
+// dropped, since a host can put anything there, and so are NaN and
+// infinities, which JSON can't carry.
 func figures(m map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range m {
-		switch v.(type) {
-		case bool, json.Number,
-			int, int8, int16, int32, int64,
-			uint, uint8, uint16, uint32, uint64,
-			float32, float64:
-			out[k] = v
+		if !figureKey.MatchString(k) {
+			continue
 		}
+		switch n := v.(type) {
+		case float64:
+			if !finite(n) {
+				continue
+			}
+		case float32:
+			if !finite(float64(n)) {
+				continue
+			}
+		case json.Number:
+			f, err := strconv.ParseFloat(string(n), 64)
+			if err != nil || !finite(f) || !json.Valid([]byte(n)) {
+				continue
+			}
+		case bool, int, int8, int16, int32, int64,
+			uint, uint8, uint16, uint32, uint64:
+		default:
+			continue
+		}
+		out[k] = v
 	}
 	return out
 }
+
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
 
 // hash is the hex SHA-256 of s, or "" when s is empty.
 func hash(s string) string {

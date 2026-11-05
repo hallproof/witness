@@ -69,10 +69,12 @@
 //
 // shield.compliance-reports is a population of the compliance reports
 // written for those same scopes: framework, scope, period, when it was
-// generated, and the summary's top-level numbers and booleans. Strings and
-// nested values in the summary are dropped. Shield never writes these
-// reports itself; your app does, if it does at all. Loomplane writes none,
-// so there this population is empty. Every 6 hours.
+// generated, and the summary's top-level numbers and booleans. Only keys
+// of lowercase letters, digits and underscores, 64 characters at most, are
+// kept, since a host could put content in a key name. Strings, nested
+// values, NaN and infinities in the summary are dropped. Shield never
+// writes these reports itself; your app does, if it does at all. Loomplane
+// writes none, so there this population is empty. Every 6 hours.
 //
 // shield.scan-outcomes is a snapshot of the previous complete UTC day's
 // scans in the tenants you name: how many ran, how many were blocked,

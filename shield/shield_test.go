@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -684,6 +685,46 @@ func TestComplianceReports(t *testing.T) {
 	})
 }
 
+func TestFiguresKeepPlainKeys(t *testing.T) {
+	got := figures(map[string]any{
+		"total_scans":           1,
+		"block_rate_7d":         0.5,
+		"passing":               true,
+		strings.Repeat("k", 64): 2,
+		strings.Repeat("k", 65): 3,
+		"Acme Corp":             4,
+		"acme-corp":             5,
+		"acme.corp":             6,
+		"":                      7,
+		"blocks_\u00e9":         8,
+	})
+	assertJSON(t, got, map[string]any{"total_scans": 1, "block_rate_7d": 0.5, "passing": true, strings.Repeat("k", 64): 2})
+}
+
+func TestFiguresDropNonFiniteNumbers(t *testing.T) {
+	got := figures(map[string]any{
+		"ok":        1.5,
+		"ok32":      float32(2.5),
+		"ok_number": json.Number("3.25"),
+		"nan":       math.NaN(),
+		"inf":       math.Inf(1),
+		"neg_inf":   math.Inf(-1),
+		"nan32":     float32(math.NaN()),
+		"inf32":     float32(math.Inf(1)),
+		"num_nan":   json.Number("NaN"),
+		"num_inf":   json.Number("Infinity"),
+		"num_huge":  json.Number("1e999"),
+		"num_junk":  json.Number("12abc"),
+	})
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("figures can't be sent: %v", err)
+	}
+	if want := `{"ok":1.5,"ok32":2.5,"ok_number":3.25}`; string(raw) != want {
+		t.Fatalf("figures = %s, want %s", raw, want)
+	}
+}
+
 func TestScanOutcomes(t *testing.T) {
 	f := newFixture(t)
 	add := func(tenant, appID string, dir scan.Direction, dec scan.Decision) {
@@ -982,7 +1023,11 @@ func TestNeverSendsContent(t *testing.T) {
 	})
 	f.addReport(t, &compliance.Report{
 		Framework: compliance.FrameworkSOC2, ScopeKey: staff, ScopeLevel: "org", PeriodStart: time.Now(), PeriodEnd: time.Now(), GeneratedAt: time.Now(),
-		Summary: map[string]any{"count": 3, "note": canary + "-summary", "nested": map[string]any{"x": canary + "-summary-nested"}},
+		Summary: map[string]any{
+			"count": 3, "note": canary + "-summary", "nested": map[string]any{"x": canary + "-summary-nested"},
+			// A host can write content into a key name too.
+			canary + "-summary-key": 1,
+		},
 		Details: map[string]any{"x": canary + "-details"},
 	})
 	f.addScan(t, staff, &scan.Result{
