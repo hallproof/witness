@@ -1,15 +1,22 @@
-.PHONY: test vet lint tidy check
+.PHONY: test vet lint tidy check modules
+
+# The root module and every nested one (scripts/modules.sh). Each target runs
+# in all of them.
+MODULES := . $(shell scripts/modules.sh)
 
 test:
-	go test -race ./...
+	@set -e; for m in $(MODULES); do echo "==> $$m"; (cd $$m && go test -race ./...); done
 
 vet:
-	go vet ./...
+	@set -e; for m in $(MODULES); do (cd $$m && go vet ./...); done
 
 lint:
-	golangci-lint run ./...
+	@set -e; for m in $(MODULES); do echo "==> $$m"; (cd $$m && golangci-lint run ./...); done
 
 tidy:
-	go mod tidy
+	@set -e; for m in $(MODULES); do (cd $$m && go mod tidy); done
 
 check: vet lint test
+
+modules:
+	@scripts/modules.sh
