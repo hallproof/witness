@@ -85,8 +85,9 @@
 // the extension registers the engine with a constructor, and a container
 // that builds it on request starts it again. So if you build the engine
 // yourself, provide the finished value with forge.ProvideValue(c, engine),
-// not a constructor. An extension that has no engine yet counts as no
-// Keysmith, and the adapter logs it.
+// not a constructor. An extension that has no Engine method, or no engine
+// yet, counts as no Keysmith: the adapter logs it and doesn't look in the
+// container either.
 //
 // Without Forge, build the adapter and register it before you start
 // witness:

@@ -1,10 +1,12 @@
 package keysmith
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -733,6 +735,27 @@ func TestAttachExtensionWithoutEngine(t *testing.T) {
 	}
 	if taken(t, w, KeyAPIKeys) {
 		t.Errorf("%s was registered with no engine", KeyAPIKeys)
+	}
+}
+
+func TestAttachExtensionWithoutGetterSkipsTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.eng)
+	h, w := extHost(t, c, struct{}{})
+	var logs bytes.Buffer
+	h.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	found, err := attach(context.Background(), h)
+	if found || err != nil {
+		t.Fatalf("attach = %v, %v; want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "no Engine getter") {
+		t.Fatalf("no warning about the missing getter; logs:\n%s", logs.String())
+	}
+	if taken(t, w, KeyAPIKeys) {
+		t.Errorf("%s was registered without the extension's engine", KeyAPIKeys)
 	}
 }
 
