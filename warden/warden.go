@@ -137,6 +137,8 @@ var (
 
 // Register adds the adapter's collectors to w. It fails when the adapter
 // has no engine, or neither tenants nor AllTenants.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	if a.eng == nil {
 		return errNoEngine
@@ -145,22 +147,11 @@ func (a *Adapter) Register(w *witness.Witness) error {
 		return errNoScope
 	}
 	snaps, pops, proofs := a.collectors()
-	for _, s := range snaps {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, e := range proofs {
-		if err := w.EventProof(e); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Snapshot(snaps...)
+	set.Population(pops...)
+	set.EventProof(proofs...)
+	return set.Register(w)
 }
 
 // where says, in a collector description, which tenants it reads.
