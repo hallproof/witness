@@ -160,13 +160,12 @@ func managerStores(m *extension.TroveManager) []storeRef {
 
 // Register adds the adapter's collectors to w: trove.stores always, and
 // trove.buckets when a store has a metadata store.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
-	for _, p := range a.populations() {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Population(a.populations()...)
+	return set.Register(w)
 }
 
 func (a *Adapter) populations() []collect.Population {
