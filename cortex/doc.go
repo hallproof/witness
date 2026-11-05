@@ -7,10 +7,12 @@
 // scope, whether it's enabled, model, reasoning loop, step limit, tool
 // names, persona and inline skill, trait and behaviour names, the keys of
 // its guardrails (never their values), its owner and principal ID, when it
-// was created and updated, and when its newest run started. It runs every
-// 15 minutes and supports the agent-has-owner, agent-owner-active and
-// no-orphaned-agents tests. An agent with no owner goes with an empty
-// owner_id, so Hallproof sees "no owner" and not a missing field.
+// was created and updated, and the UTC day its newest run started
+// (last_run_on). It runs every 15 minutes and supports the agent-has-owner,
+// agent-owner-active and no-orphaned-agents tests. An agent with no owner
+// goes with an empty owner_id, so Hallproof sees "no owner" and not a
+// missing field. Last run goes as a day, not a time, because agents run all
+// day and a timestamp would make every run new evidence.
 //
 // cortex.tools is a snapshot of the tool catalog the engine can offer a
 // model: each tool's name, where it comes from (builtin, registered or

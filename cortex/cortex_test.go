@@ -477,7 +477,7 @@ func TestAgents(t *testing.T) {
 		"tools": []string{"delete_project", "search"}, "persona_ref": "analyst",
 		"inline_skills": []string{"go", "sql"}, "inline_traits": []string{"careful"}, "inline_behaviors": []string{"ask-first"},
 		"guardrail_keys": []string{"max_cost", "pii"}, "owner_id": "usr_1", "principal_id": "agt_1",
-		"created_at": "2026-11-01T09:30:15Z", "updated_at": "2026-11-01T10:30:15Z", "last_run_at": "2026-11-01T14:30:15Z",
+		"created_at": "2026-11-01T09:30:15Z", "updated_at": "2026-11-01T10:30:15Z", "last_run_on": "2026-11-01",
 	})
 	assertJSON(t, byID[idle.ID.String()], map[string]any{
 		"id": idle.ID.String(), "name": "idle", "scope": "org=org_staff", "enabled": false,
@@ -485,8 +485,31 @@ func TestAgents(t *testing.T) {
 		"tools": []string{}, "persona_ref": "",
 		"inline_skills": []string{}, "inline_traits": []string{}, "inline_behaviors": []string{},
 		"guardrail_keys": []string{}, "owner_id": "", "principal_id": "",
-		"created_at": "2026-11-01T09:30:15Z", "updated_at": "2026-11-01T09:30:15Z", "last_run_at": nil,
+		"created_at": "2026-11-01T09:30:15Z", "updated_at": "2026-11-01T09:30:15Z", "last_run_on": nil,
 	})
+}
+
+func TestAgentRunsOnTheSameDayChangeNothing(t *testing.T) {
+	f := newFixture(t)
+	ag := f.addAgent(&agent.Config{Name: "triage", Enabled: true})
+	f.addRun(&run.Run{AgentID: ag.ID, Entity: cx.Entity{CreatedAt: t0.Add(time.Hour)}})
+	a := New(f.eng, WithOrg(staffOrg))
+	before, err := json.Marshal(items(t, a, KeyAgents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.addRun(&run.Run{AgentID: ag.ID, Entity: cx.Entity{CreatedAt: t0.Add(3 * time.Hour)}})
+	after, err := json.Marshal(items(t, a, KeyAgents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("a second run the same day changed the agent:\nbefore %s\nafter  %s", before, after)
+	}
+	f.addRun(&run.Run{AgentID: ag.ID, Entity: cx.Entity{CreatedAt: t0.Add(24 * time.Hour)}})
+	if next := items(t, a, KeyAgents); next[0]["last_run_on"] != "2026-11-02" {
+		t.Fatalf("last_run_on = %v after a run the next day, want 2026-11-02", next[0]["last_run_on"])
+	}
 }
 
 func TestAgentOwners(t *testing.T) {

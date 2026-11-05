@@ -110,7 +110,9 @@ func (a *Adapter) collectAgents(ctx context.Context) ([]map[string]any, error) {
 				"principal_id":     principal,
 				"created_at":       stamp(c.CreatedAt),
 				"updated_at":       stamp(c.UpdatedAt),
-				"last_run_at":      last,
+				// A day, not a time: an agent runs all day, and a
+				// timestamp would make every run new evidence.
+				"last_run_on": last,
 			})
 			return nil
 		})
@@ -120,10 +122,10 @@ func (a *Adapter) collectAgents(ctx context.Context) ([]map[string]any, error) {
 	return out, nil
 }
 
-// lastRun is when c's newest run was created, nil when it has none. The
-// stores list runs newest first. It reads under the configured scope that
-// holds c, not c's own, because a run can sit at a different level of the
-// tree than its agent.
+// lastRun is the UTC day c's newest run was created, nil when it has none.
+// The stores list runs newest first. It reads under the configured scope
+// that holds c, not c's own, because a run can sit at a different level of
+// the tree than its agent.
 func (a *Adapter) lastRun(ctx context.Context, c *agent.Config) (any, error) {
 	root, ok := a.rootOf(c.Scope)
 	if !ok {
@@ -136,7 +138,7 @@ func (a *Adapter) lastRun(ctx context.Context, c *agent.Config) (any, error) {
 	if len(runs) == 0 || runs[0].AgentID != c.ID || !a.inScope(runs[0].Scope) {
 		return nil, nil
 	}
-	return stamp(runs[0].CreatedAt), nil
+	return runs[0].CreatedAt.UTC().Format(time.DateOnly), nil
 }
 
 // owner is c's owner and principal ID: from the host's Owner func when
