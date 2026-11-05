@@ -1,12 +1,14 @@
 package relay
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -842,4 +844,31 @@ func resolve(t *testing.T, h adapter.Host, o Options) *Adapter {
 		t.Fatalf("find = %v, %v; want found, nil", found, err)
 	}
 	return build(r, eps, o)
+}
+
+func TestAttachExtensionWithoutGetterSkipsTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.r)
+	if err := vessel.Provide(c, func() (endpoint.Store, error) {
+		*calls++
+		return f.st, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h, w := extHost(t, c, struct{}{})
+	var logs bytes.Buffer
+	h.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	found, err := attach(context.Background(), h)
+	if found || err != nil {
+		t.Fatalf("attach = %v, %v; want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the Relay or the endpoint store %d times; want 0", *calls)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "no Relay getter") {
+		t.Fatalf("no warning about the missing getter; logs:\n%s", logs.String())
+	}
+	if taken(t, w, KeyPosture) {
+		t.Errorf("%s was registered without the extension's Relay", KeyPosture)
+	}
 }

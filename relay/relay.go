@@ -289,22 +289,26 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 // with a constructor, and a container that builds it starts it a second
 // time. Only an app without the extension is looked up in the container,
 // where an app that builds its own Relay provides the finished value. An
-// extension with no Relay yet counts as no relay.
+// extension with no Relay getter, or no Relay yet, counts as no relay, and
+// then the container isn't asked for the endpoint store either.
 //
-// The bare endpoint.Store always comes from the container. Relay's
+// Otherwise the bare endpoint.Store always comes from the container. Relay's
 // extension doesn't provide one; an app that wraps Relay's store to decrypt
 // secrets provides the raw one, as a value, for this adapter.
 func find(h adapter.Host) (*xrelay.Relay, endpoint.Store, bool, error) {
 	var r *xrelay.Relay
 	ext := false
 	if x, ok := h.Ext(extensionName); ok {
-		if g, ok := x.(interface{ Relay() *xrelay.Relay }); ok {
-			if r = g.Relay(); r == nil {
-				logger(h).Warn("witness/relay: the relay extension has no Relay yet, so nothing is collected")
-				return nil, nil, false, nil
-			}
-			ext = true
+		g, ok := x.(interface{ Relay() *xrelay.Relay })
+		if !ok {
+			logger(h).Warn("witness/relay: the relay extension has no Relay getter, so nothing is collected", "type", fmt.Sprintf("%T", x))
+			return nil, nil, false, nil
 		}
+		if r = g.Relay(); r == nil {
+			logger(h).Warn("witness/relay: the relay extension has no Relay yet, so nothing is collected")
+			return nil, nil, false, nil
+		}
+		ext = true
 	}
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil {
