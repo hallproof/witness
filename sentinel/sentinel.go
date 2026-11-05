@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -217,20 +218,51 @@ func init() {
 	})
 }
 
-// attach finds *engine.Engine in the host's container and registers the
-// collectors.
+// extensionName is the name sentinel's Forge extension registers under.
+const extensionName = "sentinel"
+
+// engineGetter is the one method of sentinel's Forge extension the adapter
+// uses. A structural interface keeps the extension module out of the
+// adapter's dependencies.
+type engineGetter interface{ Engine() *engine.Engine }
+
+// attach registers the collectors. It reads the engine through sentinel's
+// extension when the app runs it, and from the container otherwise.
+// Sentinel always has collectors to register, so there is no config that
+// leaves nothing to collect.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*engine.Engine](c) {
+	ext, hasExt := h.Ext(extensionName)
+	c, isVessel := h.Container.(vessel.Vessel)
+	inContainer := isVessel && c != nil && vessel.HasType[*engine.Engine](c)
+	if !hasExt && !inContainer {
 		return false, nil
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return true, err
 	}
-	eng, err := vessel.Inject[*engine.Engine](c)
-	if err != nil {
-		return true, fmt.Errorf("witness/sentinel: resolve the engine: %w", err)
+	log := h.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	var eng *engine.Engine
+	if hasExt {
+		g, ok := ext.(engineGetter)
+		if !ok {
+			log.Warn("witness: the sentinel extension has no Engine getter, so sentinel is skipped", "type", fmt.Sprintf("%T", ext))
+			return false, nil
+		}
+		if eng = g.Engine(); eng == nil {
+			log.Warn("witness: the sentinel extension has no engine yet, so sentinel is skipped")
+			return false, nil
+		}
+	} else {
+		// The app doesn't run sentinel's extension and provided the engine
+		// itself. A finished value is never started again.
+		var err error
+		if eng, err = vessel.Inject[*engine.Engine](c); err != nil {
+			return true, fmt.Errorf("witness/sentinel: resolve the engine: %w", err)
+		}
 	}
 	if o.AppID == "" {
 		o.AppID = h.Scope.AppID

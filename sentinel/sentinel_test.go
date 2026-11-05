@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -231,6 +232,73 @@ func TestAttachSkipsMissingEngine(t *testing.T) {
 				t.Fatalf("attach = %v, %v; want false, nil", found, err)
 			}
 		})
+	}
+}
+
+// fakeExt stands in for sentinel's Forge extension. The adapter only uses
+// its getter.
+type fakeExt struct{ eng *engine.Engine }
+
+func (x fakeExt) Engine() *engine.Engine { return x.eng }
+
+// extensions is a host's extension lookup that runs only x, as "sentinel".
+func extensions(x any) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		if name == "sentinel" {
+			return x, true
+		}
+		return nil, false
+	}
+}
+
+// constructed registers eng with a constructor, the way sentinel's
+// extension does, and counts how often the container builds it.
+func constructed(t *testing.T, eng *engine.Engine) (vessel.Vessel, *atomic.Int32) {
+	t.Helper()
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*engine.Engine, error) {
+		built.Add(1)
+		return eng, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, &built
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, built := constructed(t, f.eng)
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{Witness: w, Container: c, Extension: extensions(fakeExt{f.eng})})
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	for _, k := range []string{KeySuites, KeyLatestScores, KeyRedTeam, KeySettings} {
+		if !taken(t, w, k) {
+			t.Errorf("%s was not registered", k)
+		}
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the engine %d times, want 0", n)
+	}
+}
+
+// An extension whose getter returns nil hasn't built its engine, so
+// sentinel counts as absent and the container is never asked instead.
+func TestAttachWithAnEmptyExtensionIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	c, built := constructed(t, f.eng)
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{Witness: w, Container: c, Extension: extensions(fakeExt{})})
+	if found || err != nil {
+		t.Fatalf("attach = %v, %v; want false, nil", found, err)
+	}
+	if taken(t, w, KeySuites) {
+		t.Fatalf("%s was registered with no engine", KeySuites)
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the engine %d times, want 0", n)
 	}
 }
 

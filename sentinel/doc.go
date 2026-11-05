@@ -104,15 +104,21 @@
 //
 // # Using it
 //
-// With Forge, import the package for its side effect, and the witness
-// extension finds *engine.Engine in the container:
+// With Forge, import the package for its side effect:
 //
 //	import _ "github.com/hallproof/witness/sentinel"
 //
-// Sentinel's own Forge extension provides the engine. If you build the
-// engine yourself, provide it with forge.ProvideValue(c, eng). If your app
-// doesn't run Sentinel (Loomplane doesn't today, it only pulls Sentinel in
-// through Cortex), the adapter finds nothing and registers nothing.
+// The adapter reads the engine through sentinel's own Forge extension
+// ("sentinel", its Engine method), which already built and started it. If
+// that extension is running but has no engine yet, sentinel counts as not
+// found and the adapter logs why. Only when your app doesn't run
+// sentinel's extension does the adapter look for *engine.Engine in the
+// container. If you build the engine yourself, provide the finished value
+// with forge.ProvideValue(c, eng), not a constructor: a container starts a
+// value it builds from a constructor, and an engine started twice runs
+// everything twice. If your app doesn't run Sentinel (Loomplane doesn't
+// today, it only pulls Sentinel in through Cortex), the adapter finds
+// nothing and registers nothing.
 //
 // Without Forge, build the adapter and register it before you start
 // witness:
