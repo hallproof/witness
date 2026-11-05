@@ -568,3 +568,46 @@ func TestEventProofKeepsProgressBeforeAnError(t *testing.T) {
 		t.Fatalf("from %q, want c1", from)
 	}
 }
+
+func TestRemove(t *testing.T) {
+	s, _, _ := newTestScheduler(nil)
+	ok := func(context.Context) (map[string]any, error) { return map[string]any{"v": 1}, nil }
+	for _, k := range []string{"a", "b"} {
+		if err := s.AddSnapshot(Snapshot{Key: k, Title: "t", Every: time.Hour, Collect: ok}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !s.Remove("a") {
+		t.Fatal("Remove(a) = false, want true")
+	}
+	if s.Remove("a") {
+		t.Fatal("a second Remove(a) = true, want false")
+	}
+	if s.Remove("never-added") {
+		t.Fatal("Remove of a key never added = true")
+	}
+
+	// Run must not trip over the removed key.
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	eventually(t, "Run to start", time.Second, func() bool { return s.isRunning() })
+	if s.Remove("b") {
+		t.Error("Remove after Run = true, want false")
+	}
+	cancel()
+	<-done
+
+	// A removed key can be added again.
+	s2, _, _ := newTestScheduler(nil)
+	if err := s2.AddSnapshot(Snapshot{Key: "a", Title: "t", Collect: ok}); err != nil {
+		t.Fatal(err)
+	}
+	s2.Remove("a")
+	if err := s2.AddSnapshot(Snapshot{Key: "a", Title: "t", Collect: ok}); err != nil {
+		t.Fatalf("adding a removed key again: %v", err)
+	}
+	if len(s2.order) != 1 {
+		t.Fatalf("order = %v, want just a", s2.order)
+	}
+}

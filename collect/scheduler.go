@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -255,6 +256,23 @@ func (s *Scheduler) AddEventProof(e EventProof) error {
 			return r, nil
 		},
 	})
+}
+
+// Remove takes the collector with key back out. It reports whether there
+// was one to remove, and removes nothing once the scheduler has started.
+// The key can be added again afterwards.
+func (s *Scheduler) Remove(key string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return false
+	}
+	if _, ok := s.collectors[key]; !ok {
+		return false
+	}
+	delete(s.collectors, key)
+	s.order = slices.DeleteFunc(s.order, func(k string) bool { return k == key })
+	return true
 }
 
 func (s *Scheduler) isRunning() bool {

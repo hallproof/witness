@@ -146,6 +146,19 @@ func (w *Witness) EventProof(e collect.EventProof) error {
 	return w.register(func() error { return w.sched.AddEventProof(e) })
 }
 
+// Remove takes the collector registered under key back out, so a caller
+// that registers several collectors can undo the ones it added when a later
+// one fails. It reports whether there was one to remove. After Start it
+// removes nothing and returns false.
+func (w *Witness) Remove(key string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.started {
+		return false
+	}
+	return w.sched.Remove(key)
+}
+
 // Chain returns the chain witness records to.
 func (w *Witness) Chain() chain.Chain { return w.chain }
 

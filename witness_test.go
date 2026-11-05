@@ -270,3 +270,35 @@ func TestStartContextEndingDoesNotStopCollectors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRemove(t *testing.T) {
+	s := ingesttest.New(t)
+	w, err := witness.New(witness.Options{Endpoint: s.URL, IngestKey: s.Key, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Snapshot(collect.Snapshot{Key: "a", Title: "t", Collect: settings}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Population(collect.Population{Key: "b", Title: "t", Source: "b", Collect: staff}); err != nil {
+		t.Fatal(err)
+	}
+	if !w.Remove("a") {
+		t.Fatal("Remove(a) = false, want true")
+	}
+	if w.Remove("a") {
+		t.Fatal("a second Remove(a) = true, want false")
+	}
+	if err := w.Snapshot(collect.Snapshot{Key: "a", Title: "t", Collect: settings}); err != nil {
+		t.Fatalf("adding a removed key again: %v", err)
+	}
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if w.Remove("b") {
+		t.Error("Remove after Start = true, want false")
+	}
+	if err := stopWithin(t, w, time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
