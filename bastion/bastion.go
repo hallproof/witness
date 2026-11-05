@@ -77,22 +77,17 @@ func New(gw *bst.Gateway, opts ...Option) *Adapter {
 }
 
 // Register adds the adapter's collectors to w.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	pops, snaps, err := a.collectors()
 	if err != nil {
 		return err
 	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, s := range snaps {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Population(pops...)
+	set.Snapshot(snaps...)
+	return set.Register(w)
 }
 
 func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, error) {
