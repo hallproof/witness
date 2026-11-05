@@ -66,18 +66,23 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 // engine returns the app's Authsome engine, or nil when it has none. It
 // reads the engine through Authsome's extension when the app runs it, and
 // never asks the container then: the extension registers the engine with a
-// constructor, and a container that builds it starts it a second time. Only
-// an app without the extension is looked up in the container, where an app
-// that builds its own engine provides the finished value.
+// constructor, and a container that builds it starts it a second time. An
+// extension with no Engine getter, or no engine yet, counts as no Authsome
+// and is logged. Only an app without the extension is looked up in the
+// container, where an app that builds its own engine provides the finished
+// value.
 func engine(h adapter.Host) (*authsome.Engine, error) {
 	if x, ok := h.Ext(extensionName); ok {
-		if g, ok := x.(interface{ Engine() *authsome.Engine }); ok {
-			if eng := g.Engine(); eng != nil {
-				return eng, nil
-			}
-			logger(h).Warn("witness/authsome: the authsome extension has no engine yet, so nothing is collected")
+		g, ok := x.(interface{ Engine() *authsome.Engine })
+		if !ok {
+			logger(h).Warn("witness/authsome: the authsome extension has no Engine getter, so nothing is collected", "type", fmt.Sprintf("%T", x))
 			return nil, nil
 		}
+		if eng := g.Engine(); eng != nil {
+			return eng, nil
+		}
+		logger(h).Warn("witness/authsome: the authsome extension has no engine yet, so nothing is collected")
+		return nil, nil
 	}
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil || !vessel.HasType[*authsome.Engine](c) {

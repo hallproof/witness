@@ -1,8 +1,10 @@
 package authsome
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sort"
 	"strings"
@@ -771,4 +773,25 @@ func taken(t *testing.T, w *witness.Witness, key string) bool {
 	t.Helper()
 	err := w.Population(collect.Population{Key: key, Title: "probe", Collect: func(context.Context) ([]map[string]any, error) { return nil, nil }})
 	return err != nil && strings.Contains(err.Error(), "already used")
+}
+
+func TestAttachExtensionWithoutGetterSkipsTheContainer(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	c, calls := countingContainer(t, f.eng)
+	h, w := extHost(t, c, struct{}{})
+	var logs bytes.Buffer
+	h.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	found, err := registered(t).Attach(context.Background(), h)
+	if found || err != nil {
+		t.Fatalf("found=%v err=%v, want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	if !strings.Contains(logs.String(), "level=WARN") || !strings.Contains(logs.String(), "no Engine getter") {
+		t.Fatalf("no warning about the missing getter; logs:\n%s", logs.String())
+	}
+	if taken(t, w, "authsome.staff-users") {
+		t.Error("authsome.staff-users was registered without the extension's engine")
+	}
 }

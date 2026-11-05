@@ -15,8 +15,9 @@
 // the extension registers the engine with a constructor, and a container
 // that builds it on request starts it again. So if you build the engine
 // yourself, provide the finished value with forge.ProvideValue(c, eng), not
-// a constructor. An extension that has no engine yet counts as no Authsome,
-// and the adapter logs it.
+// a constructor. An extension that has no Engine method, or no engine yet,
+// counts as no Authsome: the adapter logs it and doesn't look in the
+// container either.
 //
 // Its options go under extensions.witness.adapters.authsome:
 //
