@@ -81,6 +81,63 @@ A collector that panics, errors or hangs past its interval is logged and marked 
 | HTTP timeout | 30 seconds | `Options.HTTPClient` |
 | Kind Hallproof doesn't take yet | held back for an hour | `client.WithHoldBack` |
 
+## Forge apps
+
+If your app runs on Forge, you don't write collectors by hand. Add the witness extension and a blank import for each library you want covered:
+
+```go
+import (
+	witnessforge "github.com/hallproof/witness/forge"
+	_ "github.com/hallproof/witness/authsome"
+	_ "github.com/hallproof/witness/chronicle"
+	_ "github.com/hallproof/witness/keysmith"
+)
+
+app := forge.New(forge.WithExtensions(
+	witnessforge.New(),
+	// your other extensions
+))
+```
+
+Then give it an endpoint and a key in your config:
+
+```yaml
+extensions:
+  witness:
+    endpoint: https://hallproof.example.com
+    ingest_key_file: /run/secrets/hallproof-ingest-key
+    scope:
+      app_id: your-platform-app
+      tenant_id: platform
+```
+
+Once your app has started, the extension looks in Forge's container for each library you imported. It collects from the ones it finds and skips the rest quietly, then pushes a `witness.coverage` snapshot so Hallproof can see what it found. With no endpoint it does nothing at all.
+
+Each adapter is a module of its own, so you only download the libraries you use:
+
+| Module | What it collects |
+|--------|------------------|
+| [`chronicle`](chronicle) | Proves signed segments of your Chronicle audit chain, and reports how far the platform stream is past its last checkpoint |
+| [`authsome`](authsome) | Staff users and their roles, auth policy, sessions, service accounts, agents and their grants |
+| [`warden`](warden) | Roles, role assignments, policies and a fingerprint of the access model |
+| [`keysmith`](keysmith) | API keys, key policies and rotation |
+| [`vault`](vault) | Secret names, versions and rotation (never values), flags and allowlisted config |
+| [`bastion`](bastion) | The gateway's routes, whether each needs auth, and its admin settings |
+| [`trove`](trove) | Object stores and the protections applied when objects are written |
+| [`grove`](grove) | Applied database migrations |
+| [`relay`](relay) | Webhook destinations, whether they're signed, and an overall posture |
+| [`dispatch`](dispatch) | Scheduled jobs and their results, including your backups |
+| [`cortex`](cortex) | AI agents, their owners and tools, and approvals waiting on a person |
+| [`nexus`](nexus) | AI providers and models in use, keys and budgets |
+| [`shield`](shield) | AI safety profiles, checks and policies |
+| [`sentinel`](sentinel) | AI eval suites, latest scores and red-team runs |
+
+Witness collects staff, not customers, by default: the people who run your platform, its service accounts and its keys. Some libraries can't tell those apart on their own, so their adapters need you to name the platform's tenants or apps, and each package's docs say which. A company whose audit covers customer access too can set `scope.all_tenants`, and Hallproof shows that the scope was widened.
+
+Adapters send metadata, never content. No secret values, prompts, payloads, bodies or error text leave your app, and every adapter has a test that fails if one does.
+
+Outside Forge, each adapter has a plain constructor that takes the library's engine, such as `keysmith.New(engine, keysmith.WithStaffTenants("acme"))`, and a `Register(w)` that adds its collectors to your witness.
+
 ## The packages
 
 - [`push`](push) is the wire protocol: the batch and message types, the hashes and the limits.
@@ -89,6 +146,7 @@ A collector that panics, errors or hangs past its interval is logged and marked 
 - [`chain`](chain) is the interface for recording and proving events.
 - [`httpmw`](httpmw) is the `net/http` middleware.
 - [`ingesttest`](ingesttest) is a fake Hallproof ingest API for your tests.
+- [`adapter`](adapter) is the registry the library adapters join.
 
 ## Not on Go?
 
@@ -98,7 +156,6 @@ The protocol is written down in [`spec/protocol.md`](spec/protocol.md), with a J
 
 We're building witness in steps, and v0.x means the API can still change.
 
-- Adapters for the Forge ecosystem: one extension that finds Authsome, Warden, Keysmith, Vault and the rest in your app and collects from each, plus a Chronicle adapter that proves the audit events Chronicle already records.
 - Enforcement: gates a developer declares in code and an admin switches on in Hallproof, starting in report-only mode, so Hallproof can block what a control forbids without ever doing it silently.
 - A chain witness runs itself, for apps that don't use Chronicle.
 
