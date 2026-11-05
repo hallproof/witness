@@ -130,6 +130,11 @@
 // adapter logs a warning and doesn't widen. Each run reads every tenant's
 // rows (eight list calls a tenant), which is why it runs every 6 hours.
 //
+// When it's this adapter's own all_tenants that widens the scope, and a
+// TenantSource is there, attach tells the host through Host.Widened, so
+// Hallproof shows the widening. The witness scope's AllTenants is the
+// host's to report.
+//
 // A scope that holds more than push.MaxItems rows in one population fails
 // the run with ErrTooMany, and the heartbeat reports the collector
 // unhealthy, because a truncated list would read as the full set.

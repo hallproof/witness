@@ -369,6 +369,54 @@ func TestAttachWidening(t *testing.T) {
 	})
 }
 
+func TestAttachTellsTheHostItWidened(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config map[string]any
+		scope  bool // the witness scope's AllTenants
+		source bool // a TenantSource in the container
+		want   []string
+	}{
+		{"own all_tenants", map[string]any{"all_tenants": true}, false, true, []string{"all_tenants"}},
+		// The host reports its own scope; the adapter only reports its own
+		// config.
+		{"scope only", nil, true, true, nil},
+		{"own all_tenants without a tenant source", map[string]any{"all_tenants": true}, false, false, nil},
+		{"staff tenants", map[string]any{"tenants": []any{staff}}, false, true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			c := vessel.New()
+			must(t, vessel.ProvideValue(c, f.eng))
+			if tc.source {
+				must(t, vessel.ProvideValue(c, tenantsFrom(staff, customer)))
+			}
+			var got []string
+			found, err := attach(context.Background(), adapter.Host{
+				Witness: newWitness(t), Scope: adapter.Scope{AllTenants: tc.scope}, Container: c, Config: tc.config,
+				Widen: func(r string) { got = append(got, r) },
+			})
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v; want true, nil", found, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("Widen calls = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConformanceSaysWhoItCovers(t *testing.T) {
+	f := newFixture(t)
+	s, ok := collectorsOf(t, New(f.eng, WithAllTenants(), WithTenantSource(tenantsFrom(staff)))).snaps[KeyConformance]
+	if !ok {
+		t.Fatal("no conformance snapshot")
+	}
+	if !strings.Contains(s.Description, "every tenant") || !strings.Contains(s.Description, "customers") {
+		t.Fatalf("Description = %q, want it to say it covers every tenant, customers included", s.Description)
+	}
+}
+
 func TestRegisterWideningNeedsATenantSource(t *testing.T) {
 	f := newFixture(t)
 	if err := New(f.eng, WithAllTenants()).Register(newWitness(t)); !errors.Is(err, ErrNoTenantSource) {

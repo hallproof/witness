@@ -271,7 +271,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 			snaps = append(snaps, collect.Snapshot{
 				Key:         KeyConformance,
 				Title:       "AI safety configuration across tenants",
-				Description: "How many tenants run each distinct safety configuration, without naming any tenant.",
+				Description: "How many tenants run each distinct safety configuration, across every tenant your tenant source lists, customers included, without naming any tenant.",
 				Every:       6 * time.Hour,
 				Collect:     a.collectConformance,
 			})
@@ -322,6 +322,7 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if log == nil {
 		log = slog.Default()
 	}
+	own := o.AllTenants
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	if o.AllTenants && vessel.HasType[TenantSource](c) {
 		src, err := vessel.Inject[TenantSource](c)
@@ -333,6 +334,11 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if o.AllTenants && o.TenantSource == nil {
 		log.Warn("witness: shield can't list its tenants and no shield.TenantSource is in the container, so the scope is not widened")
 		o.AllTenants = false
+	}
+	// The host reports its own scope. Only this adapter's config is ours to
+	// report, and only when it really widened.
+	if own && o.AllTenants {
+		h.Widened("all_tenants")
 	}
 	if eng.Store() == nil {
 		log.Warn("witness: shield has no store, so only its engine settings are collected")
