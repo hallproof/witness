@@ -70,6 +70,20 @@ type Host struct {
 	// SetChain binds the chain that event proofs and the middleware use.
 	// Only chain adapters call it, and only before the witness starts.
 	SetChain func(chain.Chain)
+	// Widen tells the host that this adapter collects beyond staff, because
+	// its own config widened it (all_tenants or the like), so the host can
+	// tell Hallproof. reason says how, in a few words, and never names a
+	// tenant. Nil means the host doesn't track it; adapters call it through
+	// (Host).Widened, which allows for that.
+	Widen func(reason string)
+}
+
+// Widened reports that the adapter collects beyond staff. It is safe to call
+// when the host set no Widen.
+func (h Host) Widened(reason string) {
+	if h.Widen != nil {
+		h.Widen(reason)
+	}
 }
 
 // Adapter is one library's adapter.

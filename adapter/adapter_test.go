@@ -82,3 +82,12 @@ func TestStaffRolesDefault(t *testing.T) {
 		t.Fatalf("configured staff roles = %v", got)
 	}
 }
+
+func TestWidened(t *testing.T) {
+	Host{}.Widened("all_tenants") // no Widen set: no panic
+	var got []string
+	Host{Widen: func(r string) { got = append(got, r) }}.Widened("all_tenants")
+	if len(got) != 1 || got[0] != "all_tenants" {
+		t.Fatalf("Widen got %v", got)
+	}
+}
