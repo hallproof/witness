@@ -50,14 +50,15 @@
 // means every built-in detector for that focus); each judgment's domain,
 // threshold, action and assessors (name, domain, weight); each values row's
 // severity, action and rules (principle, threshold, categories); each
-// reflex's priority, triggers (type, threshold, window), actions (type,
-// target) and whether any action escalates to a person; and each boundary's
-// limits (scope, allowlist mode, and how many entries it denies and
-// allows). It supports the high-risk-approved test. A reflex trigger of
-// type on_context whose pattern is exactly risk_class=<lowercase word>, the
-// form shield's InfraAgent preset uses, sends that risk class, so you can
-// see which risk classes are set to need a person's approval. Cortex's
-// checkpoint events show the approvals happened. Hourly.
+// reflex's priority, triggers (type, threshold, window), actions (type and
+// a SHA-256 of the target) and whether any action escalates to a person;
+// and each boundary's limits (scope, allowlist mode, and how many entries
+// it denies and allows). It supports the high-risk-approved test. A reflex
+// trigger of type on_context whose pattern is exactly
+// risk_class=<lowercase word>, the form shield's InfraAgent preset uses,
+// sends that risk class, so you can see which risk classes are set to need
+// a person's approval. Cortex's checkpoint events show the approvals
+// happened. Hourly.
 //
 // shield.policies is a population of the org-level policies of each tenant
 // you name, plus the app-wide policies of your app when you set AppID. App
@@ -87,11 +88,12 @@
 // descriptions, any metadata, instinct strategy configs (a canary strategy
 // keeps its canary token there), awareness detector patterns and configs,
 // values guidelines and configs, judgment assessor configs, reflex trigger
-// patterns (other than the risk class form above), reflex action values and
-// fallback text, boundary deny and allow lists and canned responses, policy
-// rule error messages, policy conditions (a hash goes instead), and report
-// details. A reflex window that isn't a Go duration such as "1m" goes as an
-// empty string.
+// patterns (other than the risk class form above), reflex action targets
+// (a redact action's target is the regex it redacts with, so a hash goes
+// instead), reflex action values and fallback text, boundary deny and
+// allow lists and canned responses, policy rule error messages, policy
+// conditions (a hash goes instead), and report details. A reflex window
+// that isn't a Go duration such as "1m" goes as an empty string.
 //
 // # Scope
 //

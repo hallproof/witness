@@ -561,12 +561,12 @@ func TestChecks(t *testing.T) {
 				{"type": "on_context", "threshold": 0, "window": "", "risk_class": "destroy_production"},
 				{"type": "on_rate", "threshold": 10, "window": "1m", "risk_class": ""},
 			},
-			"actions": []map[string]any{{"type": "log", "target": "output"}, {"type": "escalate", "target": ""}},
+			"actions": []map[string]any{{"type": "log", "target_sha256": sum("output")}, {"type": "escalate", "target_sha256": ""}},
 		}),
 		common("reflex", quiet.ID.String(), "log-only", quiet.CreatedAt, map[string]any{
 			"priority": 0, "enabled": true, "escalates": false,
 			"triggers": []map[string]any{{"type": "on_pattern", "threshold": 0, "window": "", "risk_class": ""}},
-			"actions":  []map[string]any{{"type": "flag", "target": ""}},
+			"actions":  []map[string]any{{"type": "flag", "target_sha256": ""}},
 		}),
 		common("boundary", bd.ID.String(), "agent-actions", bd.CreatedAt, map[string]any{
 			"enabled": true,
@@ -963,7 +963,11 @@ func TestNeverSendsContent(t *testing.T) {
 			{Type: reflex.TriggerOnContext, Pattern: "risk_class=" + canary},
 			{Type: reflex.TriggerOnRate, Window: canary + "-window"},
 		},
-		Actions: []reflex.Action{{Type: reflex.ActionRewrite, Value: canary + "-value", Fallback: canary + "-fallback"}},
+		Actions: []reflex.Action{
+			{Type: reflex.ActionRewrite, Value: canary + "-value", Fallback: canary + "-fallback"},
+			// A redact action's target is the regex shield redacts with.
+			{Type: reflex.ActionRedact, Target: canary + `-target-\d+`},
+		},
 	}))
 	must(t, f.st.CreateBoundary(ctx, &boundary.Boundary{
 		ID: id.NewBoundaryID(), Name: "fence", AppID: app, Enabled: true,

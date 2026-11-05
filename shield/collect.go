@@ -535,7 +535,11 @@ func reflexItem(r *reflex.Reflex) map[string]any {
 	actions := make([]map[string]any, 0, len(r.Actions))
 	escalates := false
 	for _, ac := range r.Actions {
-		actions = append(actions, map[string]any{"type": string(ac.Type), "target": ac.Target})
+		// Target is free text. For a redact action it is the regex shield
+		// redacts with, which can spell out the very data it hides, and
+		// shield defines no fixed targets that would be safe to send. Its
+		// hash still shows when a target changes.
+		actions = append(actions, map[string]any{"type": string(ac.Type), "target_sha256": hash(ac.Target)})
 		escalates = escalates || ac.Type == reflex.ActionEscalate
 	}
 	it["priority"], it["enabled"], it["escalates"] = r.Priority, r.Enabled, escalates
@@ -559,13 +563,8 @@ func riskClass(tr reflex.Trigger) string {
 func policyItem(p *policy.Policy) map[string]any {
 	rules := make([]map[string]any, 0, len(p.Rules))
 	for _, r := range p.Rules {
-		cond := ""
-		if r.Condition != "" {
-			h := sha256.Sum256([]byte(r.Condition))
-			cond = hex.EncodeToString(h[:])
-		}
 		rules = append(rules, map[string]any{
-			"check_type": r.CheckType, "action": r.Action, "priority": r.Priority, "condition_sha256": cond,
+			"check_type": r.CheckType, "action": r.Action, "priority": r.Priority, "condition_sha256": hash(r.Condition),
 		})
 	}
 	return map[string]any{
@@ -608,6 +607,15 @@ func figures(m map[string]any) map[string]any {
 		}
 	}
 	return out
+}
+
+// hash is the hex SHA-256 of s, or "" when s is empty.
+func hash(s string) string {
+	if s == "" {
+		return ""
+	}
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
 }
 
 func nameList(in []string) []string {
