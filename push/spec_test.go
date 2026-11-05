@@ -64,8 +64,9 @@ func keysOf(m map[string]any) []string {
 }
 
 func stringsOf(v any) []string {
-	var out []string
-	for _, x := range asSlice(v) {
+	xs := asSlice(v)
+	out := make([]string, 0, len(xs))
+	for _, x := range xs {
 		s, _ := x.(string)
 		out = append(out, s)
 	}
