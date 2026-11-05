@@ -266,17 +266,22 @@ func (a *Adapter) collectors() (snaps []collect.Snapshot, pops []collect.Populat
 	return snaps, pops, proofs
 }
 
+// extensionName is Warden's own Forge extension, which builds and starts
+// the engine.
+const extensionName = "warden"
+
 func init() {
 	adapter.Register(adapter.Adapter{
 		Name:   Name,
 		Module: Module,
-		After:  []string{"warden"},
+		After:  []string{extensionName},
 		Attach: attach,
 	})
 }
 
-// attach finds the engine, from the config's ConfigEngine key or the
-// container, and registers the collectors the scope allows.
+// attach finds the engine, from the config's ConfigEngine key, Warden's
+// extension or the container, and registers the collectors the scope
+// allows.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
 	eng, err := engine(h)
 	if err != nil {
@@ -311,11 +316,26 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	return true, nil
 }
 
-// engine returns the host's Warden engine, or nil when it has none. It
-// fails when the container has one that won't resolve.
+// engine returns the host's Warden engine, or nil when it has none. An
+// engine under the config's ConfigEngine key comes first. Next it reads the
+// engine through Warden's extension when the app runs it, and never asks
+// the container then: the extension registers the engine with a
+// constructor, and a container that builds it starts it a second time.
+// Only an app without the extension is looked up in the container, where an
+// app that builds its own engine provides the finished value. It fails when
+// the container has an engine that won't resolve.
 func engine(h adapter.Host) (*warden.Engine, error) {
 	if eng, ok := h.Config[ConfigEngine].(*warden.Engine); ok && eng != nil {
 		return eng, nil
+	}
+	if x, ok := h.Ext(extensionName); ok {
+		if g, ok := x.(interface{ Engine() *warden.Engine }); ok {
+			if eng := g.Engine(); eng != nil {
+				return eng, nil
+			}
+			logger(h).Warn("witness/warden: the warden extension has no engine yet, so nothing is collected")
+			return nil, nil
+		}
 	}
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil || !vessel.HasType[*warden.Engine](c) {

@@ -7,11 +7,16 @@
 //
 //	import _ "github.com/hallproof/witness/warden"
 //
-// The adapter looks for a *warden.Engine in the container. Warden's own
-// Forge extension provides one. If you build the engine yourself, provide
-// it with forge.ProvideValue(c, eng), or, when you build the witness config
-// in Go, put it under the "engine" key of the adapter's section
-// (ConfigEngine). The adapter doesn't import Authsome, so an engine you
+// The adapter asks Warden's own Forge extension ("warden") for the engine,
+// through its Engine method. Only when your app doesn't run that extension
+// does it look for a *warden.Engine in the container. The order matters:
+// the extension registers the engine with a constructor, and a container
+// that builds it on request starts it again. An extension that has no
+// engine yet counts as no Warden, and the adapter logs it. If you build the
+// engine yourself, provide the finished value with forge.ProvideValue(c,
+// eng), not a constructor, or, when you build the witness config in Go,
+// put it under the "engine" key of the adapter's section (ConfigEngine).
+// An engine under that key wins over the extension and the container. The adapter doesn't import Authsome, so an engine you
 // only reach through (*authsome.Engine).Warden() has to be provided one of
 // those two ways. Without an engine the adapter stays quiet and the rest of
 // witness carries on.

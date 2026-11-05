@@ -630,3 +630,95 @@ func TestAttachReportsAnEngineThatWontResolve(t *testing.T) {
 		t.Fatalf("Attach = %v, %v; want true and the resolve error", found, err)
 	}
 }
+
+// wardenExt stands in for Warden's Forge extension: only its getter.
+type wardenExt struct{ eng *xwarden.Engine }
+
+func (x wardenExt) Engine() *xwarden.Engine { return x.eng }
+
+// withExt makes h's app run ext under Warden's extension name.
+func withExt(h adapter.Host, ext any) adapter.Host {
+	h.Extension = func(name string) (any, bool) {
+		if name == "warden" {
+			return ext, true
+		}
+		return nil, false
+	}
+	return h
+}
+
+// countingContainer registers the engine with a constructor, as Warden's
+// extension does, and counts how often the container builds it.
+func countingContainer(t *testing.T, eng *xwarden.Engine) (vessel.Vessel, *int) {
+	t.Helper()
+	calls := new(int)
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*xwarden.Engine, error) {
+		*calls++
+		return eng, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, calls
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	f.seed(t)
+	c, calls := countingContainer(t, f.eng)
+	h, w := host(t, c, nil)
+	found, err := attachRegistered(t, withExt(h, wardenExt{eng: f.eng}))
+	if !found || err != nil {
+		t.Fatalf("Attach = %v, %v; want true, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	for _, key := range []string{"warden.model", "warden.roles", "warden.assignments", "warden.policies"} {
+		if !registered(w, key) {
+			t.Errorf("%s is not registered", key)
+		}
+	}
+}
+
+func TestAttachExtensionWithoutEngine(t *testing.T) {
+	f := newFixture(t)
+	c, calls := countingContainer(t, f.eng)
+	h, w := host(t, c, nil)
+	found, err := attachRegistered(t, withExt(h, wardenExt{}))
+	if found || err != nil {
+		t.Fatalf("Attach = %v, %v; want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the engine %d times; want 0", *calls)
+	}
+	if registered(w, "warden.roles") {
+		t.Error("warden.roles is registered with no engine")
+	}
+}
+
+// An engine the host puts in the config still wins over the extension.
+func TestAttachConfigEngineWinsOverTheExtension(t *testing.T) {
+	f := newFixture(t)
+	f.seed(t)
+	other := newFixture(t)
+	h, w := host(t, vessel.New(), map[string]any{ConfigEngine: f.eng})
+	ext := &countingExt{eng: other.eng}
+	found, err := attachRegistered(t, withExt(h, ext))
+	if !found || err != nil {
+		t.Fatalf("Attach = %v, %v; want true, nil", found, err)
+	}
+	if ext.calls != 0 {
+		t.Fatalf("the extension was asked for its engine %d times; want 0", ext.calls)
+	}
+	if !registered(w, "warden.roles") {
+		t.Error("warden.roles is not registered")
+	}
+}
+
+type countingExt struct {
+	eng   *xwarden.Engine
+	calls int
+}
+
+func (x *countingExt) Engine() *xwarden.Engine { x.calls++; return x.eng }
