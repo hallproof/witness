@@ -205,25 +205,19 @@ func (a *Adapter) flagConfigApps() []string {
 
 // Register adds the adapter's collectors to w and logs what it covers.
 // Register them before w starts.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	if a.store == nil {
 		return errors.New("witness/vault: no store")
 	}
-	set := a.collectors()
-	for _, s := range set.snapshots {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	for _, p := range set.populations {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, e := range set.proofs {
-		if err := w.EventProof(e); err != nil {
-			return err
-		}
+	cs := a.collectors()
+	var set adapter.Set
+	set.Snapshot(cs.snapshots...)
+	set.Population(cs.populations...)
+	set.EventProof(cs.proofs...)
+	if err := set.Register(w); err != nil {
+		return err
 	}
 	a.logCoverage()
 	return nil
