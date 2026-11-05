@@ -37,9 +37,24 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # The root and every nested module (scripts/modules.sh) release
-      # together, at one version, on one commit. scripts/release-tags.sh
-      # pushes whichever of those tags are missing in one atomic push.
+      # Go comes first: release-tags.sh reads every go.mod with go mod edit.
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          # The root asks for Go 1.25, but the nested modules need what
+          # their libraries need, Go 1.26, and the verify step builds them
+          # all.
+          go-version: "1.26"
+          # The root has no go.sum; the nested modules' go.sum files key
+          # the cache.
+          cache: true
+          cache-dependency-path: '**/go.sum'
+
+      # The root and every nested module (scripts/modules.sh) but the
+      # test-only e2e release together, at one version, on one commit.
+      # scripts/release-tags.sh refuses unless every go.mod requires this
+      # repo's modules at that version, then pushes whichever of those tags
+      # are missing in one atomic push.
       #
       # When someone pushed the root tag, it's already public, so the nested
       # tags go out straight away: a root nobody can get the adapters for is
@@ -48,14 +63,6 @@ jobs:
       - name: Tag nested modules (root tag pushed)
         if: github.event_name == 'push'
         run: scripts/release-tags.sh "${{ steps.set-tag.outputs.tag }}"
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-          # The root module has no dependencies and so no go.sum to key a
-          # cache on.
-          cache: false
 
       - name: Verify every module
         run: |
