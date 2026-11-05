@@ -45,7 +45,10 @@
 //
 // AllTenants (config all_tenants, or the witness scope's AllTenants) reads
 // every tenant's keys and policies, your customers' included. AppID still
-// applies when it's set. Hallproof shows that the scope was widened.
+// applies when it's set. Hallproof shows that the scope was widened: the
+// collector descriptions say every tenant, and when the adapter's own
+// all_tenants is on it tells the witness so. The host reports its own
+// scope.
 //
 // A scope that holds more than push.MaxItems keys or policies fails the run
 // with ErrTooMany, and the heartbeat reports the collector unhealthy, because
@@ -104,7 +107,8 @@
 //   - Lists page by offset over created_at, which can skip or repeat a
 //     row when keys are created during a scan. The adapter drops repeats,
 //     and a skipped key shows up on the next run. Keyset paging would fix
-//     it properly.
+//     it properly. A store that ignores Offset hands back the first page
+//     forever, so a full page with nothing new fails the run.
 //   - Who revoked a key and why isn't stored on the key. It only reaches
 //     the OnKeyRevoked hook, so the audit event is the only record.
 //   - The audit_hook plugin is opt-in, and keysmith's Forge extension

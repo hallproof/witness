@@ -162,6 +162,14 @@ func (a *Adapter) Register(w *witness.Witness) error {
 	return nil
 }
 
+// where says, in a collector description, which tenants it reads.
+func (a *Adapter) where() string {
+	if a.o.AllTenants {
+		return "every tenant, customers included"
+	}
+	return "the staff tenants"
+}
+
 func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []collect.EventProof, error) {
 	if a.eng == nil {
 		return nil, nil, nil, errors.New("witness/keysmith: no engine")
@@ -173,7 +181,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 		{
 			Key:         KeyAPIKeys,
 			Title:       "API keys",
-			Description: "Every API key in the staff scope, with its owner, scopes, state, expiry and rotation date.",
+			Description: "Every API key in " + a.where() + ", with its owner, scopes, state, expiry and rotation date.",
 			Source:      "api-keys",
 			Tests:       []string{"keys-rotated", "no-active-leavers"},
 			Every:       15 * time.Minute,
@@ -182,7 +190,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 		{
 			Key:         KeyPolicies,
 			Title:       "Key policies",
-			Description: "The rules each key is held to, including how long a key may live and how often it must rotate.",
+			Description: "The rules each key in " + a.where() + " is held to, including how long a key may live and how often it must rotate.",
 			Source:      "key-policies",
 			Tests:       []string{"keys-rotated"},
 			Every:       time.Hour,
@@ -192,7 +200,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 	snaps := []collect.Snapshot{{
 		Key:         KeyRotation,
 		Title:       "Key rotation",
-		Description: "How many staff keys there are, how many are active, and the oldest rotation date among active keys.",
+		Description: "How many keys there are in " + a.where() + ", how many are active, and the oldest rotation date among active keys.",
 		Tests:       []string{"keys-rotated"},
 		Every:       15 * time.Minute,
 		Collect:     a.collectRotation,
@@ -243,6 +251,8 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if o.AppID == "" {
 		o.AppID = h.Scope.AppID
 	}
+	// The host reports its own all-tenants scope; this is the adapter's.
+	own := o.AllTenants
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	err = newAdapter(eng, o).Register(h.Witness)
 	if errors.Is(err, ErrNoTenants) {
@@ -253,5 +263,11 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		log.Warn("witness: keysmith found, but no staff_tenants are set, so no keys are collected")
 		return true, nil
 	}
-	return true, err
+	if err != nil {
+		return true, err
+	}
+	if own {
+		h.Widened("all_tenants")
+	}
+	return true, nil
 }

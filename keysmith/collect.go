@@ -3,6 +3,7 @@ package keysmith
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -19,6 +20,10 @@ const pageSize = 1000
 // maxItems is the most rows a collector reads in scope before it fails the
 // run. A variable so tests can lower it.
 var maxItems = push.MaxItems
+
+// errStuck is what a walk returns when a full page brings no row it hasn't
+// seen, which means the store ignores Offset and paging would never end.
+var errStuck = errors.New("witness/keysmith: the store returned a full page of rows already seen; does it honour Offset?")
 
 // filterTenants are the tenant IDs to list: one empty ID, which keysmith
 // reads as every tenant, when AllTenants is on, else the staff tenants.
@@ -41,17 +46,24 @@ func (a *Adapter) inScope(appID, tenantID string) bool {
 // eachKey calls fn once for every key in scope. It pages through each
 // tenant, skips a key seen on an earlier page (offset paging can repeat a
 // row when keys are created mid-scan), and fails with ErrTooMany past
-// maxItems keys.
+// maxItems keys. A full page with no row it hasn't seen fails with
+// errStuck, since a store that ignores Offset would page forever.
 func (a *Adapter) eachKey(ctx context.Context, fn func(*key.Key) error) error {
 	seen := map[string]bool{}
 	for _, t := range a.filterTenants() {
+		walked := map[string]bool{}
 		for off := 0; ; off += pageSize {
 			page, err := a.eng.ListKeys(ctx, &key.ListFilter{TenantID: t, Limit: pageSize, Offset: off})
 			if err != nil {
 				return fmt.Errorf("witness/keysmith: list keys: %w", err)
 			}
+			fresh := 0
 			for _, k := range page {
 				kid := k.ID.String()
+				if !walked[kid] {
+					walked[kid] = true
+					fresh++
+				}
 				if !a.inScope(k.AppID, k.TenantID) || seen[kid] {
 					continue
 				}
@@ -66,6 +78,9 @@ func (a *Adapter) eachKey(ctx context.Context, fn func(*key.Key) error) error {
 			if len(page) < pageSize {
 				break
 			}
+			if fresh == 0 {
+				return errStuck
+			}
 		}
 	}
 	return nil
@@ -74,13 +89,19 @@ func (a *Adapter) eachKey(ctx context.Context, fn func(*key.Key) error) error {
 func (a *Adapter) eachPolicy(ctx context.Context, fn func(*policy.Policy)) error {
 	seen := map[string]bool{}
 	for _, t := range a.filterTenants() {
+		walked := map[string]bool{}
 		for off := 0; ; off += pageSize {
 			page, err := a.eng.ListPolicies(ctx, &policy.ListFilter{TenantID: t, Limit: pageSize, Offset: off})
 			if err != nil {
 				return fmt.Errorf("witness/keysmith: list policies: %w", err)
 			}
+			fresh := 0
 			for _, p := range page {
 				pid := p.ID.String()
+				if !walked[pid] {
+					walked[pid] = true
+					fresh++
+				}
 				if !a.inScope(p.AppID, p.TenantID) || seen[pid] {
 					continue
 				}
@@ -92,6 +113,9 @@ func (a *Adapter) eachPolicy(ctx context.Context, fn func(*policy.Policy)) error
 			}
 			if len(page) < pageSize {
 				break
+			}
+			if fresh == 0 {
+				return errStuck
 			}
 		}
 	}

@@ -547,3 +547,119 @@ func assertJSON(t *testing.T, got, want any) {
 		t.Fatalf("got  %s\nwant %s", gj, wj)
 	}
 }
+
+func TestAttachReportsWidening(t *testing.T) {
+	f := newFixture(t)
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.eng); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		cfg   map[string]any
+		scope bool
+		want  []string
+	}{
+		"staff tenants":          {map[string]any{"staff_tenants": []any{staff}}, false, nil},
+		"host scope all tenants": {nil, true, nil},
+		"all tenants":            {map[string]any{"all_tenants": true}, false, []string{"all_tenants"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []string
+			found, err := attach(context.Background(), adapter.Host{
+				Witness:   newWitness(t),
+				Scope:     adapter.Scope{AppID: platformApp, AllTenants: tc.scope},
+				Container: c,
+				Config:    tc.cfg,
+				Widen:     func(r string) { got = append(got, r) },
+			})
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v", found, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("Widen got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWidenedDescriptions(t *testing.T) {
+	f := newFixture(t)
+	wide := collectorsOf(t, New(f.eng, WithAllTenants()))
+	narrow := collectorsOf(t, New(f.eng, WithStaffTenants(staff)))
+	descs := func(c collected) map[string]string {
+		return map[string]string{
+			KeyAPIKeys:  c.pops[KeyAPIKeys].Description,
+			KeyPolicies: c.pops[KeyPolicies].Description,
+			KeyRotation: c.snaps[KeyRotation].Description,
+		}
+	}
+	n := descs(narrow)
+	for k, d := range descs(wide) {
+		if !strings.Contains(d, "every tenant, customers included") {
+			t.Errorf("%s with all_tenants: %q", k, d)
+		}
+		if strings.Contains(n[k], "customers") {
+			t.Errorf("%s by default: %q", k, n[k])
+		}
+	}
+}
+
+// offsetBlind is a keysmith store whose key and policy lists ignore Offset,
+// so every page is the first one. After a few calls it fails, so a walk
+// that never stops shows up as that error instead of a hung test.
+type offsetBlind struct {
+	*memory.Store
+	calls *int
+}
+
+type blindKeys struct {
+	key.Store
+	calls *int
+}
+
+type blindPolicies struct {
+	policy.Store
+	calls *int
+}
+
+var errSpun = errors.New("list called too many times")
+
+func (s offsetBlind) Keys() key.Store        { return blindKeys{s.Store.Keys(), s.calls} }
+func (s offsetBlind) Policies() policy.Store { return blindPolicies{s.Store.Policies(), s.calls} }
+func (s blindKeys) List(ctx context.Context, f *key.ListFilter) ([]*key.Key, error) {
+	if *s.calls++; *s.calls > 20 {
+		return nil, errSpun
+	}
+	g := *f
+	g.Offset = 0
+	return s.Store.List(ctx, &g)
+}
+func (s blindPolicies) List(ctx context.Context, f *policy.ListFilter) ([]*policy.Policy, error) {
+	if *s.calls++; *s.calls > 20 {
+		return nil, errSpun
+	}
+	g := *f
+	g.Offset = 0
+	return s.Store.List(ctx, &g)
+}
+
+func TestPagingFailsWhenTheStoreIgnoresOffset(t *testing.T) {
+	f := newFixture(t)
+	for i := range pageSize + 5 {
+		f.addKey(t, &key.Key{Name: fmt.Sprint("k", i)})
+		f.addPolicy(t, &policy.Policy{Name: fmt.Sprint("p", i)})
+	}
+	calls := 0
+	eng, err := ks.NewEngine(ks.WithStore(offsetBlind{f.st, &calls}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := New(eng, WithStaffTenants(staff))
+	for _, k := range []string{KeyAPIKeys, KeyPolicies} {
+		calls = 0
+		_, err := collectorsOf(t, a).pops[k].Collect(context.Background())
+		if !errors.Is(err, errStuck) {
+			t.Errorf("%s: err = %v, want errStuck", k, err)
+		}
+	}
+}
