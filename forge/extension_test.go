@@ -440,15 +440,21 @@ func TestLibrariesAndExclude(t *testing.T) {
 	}
 }
 
+// coverageAdapter is one adapter's entry in the coverage snapshot.
+type coverageAdapter struct {
+	Name      string   `json:"name"`
+	Module    string   `json:"module"`
+	Found     bool     `json:"found"`
+	Error     *bool    `json:"error"`
+	Widened   *bool    `json:"widened"`
+	WidenedBy []string `json:"widened_by"`
+}
+
 // coverage is the witness.coverage snapshot's settings.
 type coverage struct {
-	Scope    string `json:"scope"`
-	Adapters []struct {
-		Name   string `json:"name"`
-		Module string `json:"module"`
-		Found  bool   `json:"found"`
-		Error  *bool  `json:"error"`
-	} `json:"adapters"`
+	Scope      string            `json:"scope"`
+	AnyWidened *bool             `json:"any_widened"`
+	Adapters   []coverageAdapter `json:"adapters"`
 }
 
 func coverageOf(t *testing.T, s *ingesttest.Server) (coverage, push.ConfigSnapshot, push.Message) {
@@ -501,6 +507,9 @@ func TestCoverageSnapshot(t *testing.T) {
 	if cov.Scope != "staff" {
 		t.Fatalf("scope %q, want staff", cov.Scope)
 	}
+	if cov.AnyWidened != nil {
+		t.Fatalf("any_widened is %v; no adapter widened, so it should be left out", *cov.AnyWidened)
+	}
 	want := map[string]struct{ found, err bool }{
 		found: {true, false}, absent: {false, false}, broken: {false, true}, excluded: {false, false},
 	}
@@ -509,12 +518,7 @@ func TestCoverageSnapshot(t *testing.T) {
 	if len(cov.Adapters) != len(adapter.Adapters()) {
 		t.Fatalf("coverage lists %d adapters, the registry has %d", len(cov.Adapters), len(adapter.Adapters()))
 	}
-	if !slices.IsSortedFunc(cov.Adapters, func(a, b struct {
-		Name   string `json:"name"`
-		Module string `json:"module"`
-		Found  bool   `json:"found"`
-		Error  *bool  `json:"error"`
-	}) int {
+	if !slices.IsSortedFunc(cov.Adapters, func(a, b coverageAdapter) int {
 		return strings.Compare(a.Name, b.Name)
 	}) {
 		t.Fatal("coverage adapters aren't sorted by name")
@@ -535,6 +539,9 @@ func TestCoverageSnapshot(t *testing.T) {
 		if a.Error != nil && !*a.Error {
 			t.Fatalf("%s: error is false; it should be left out", a.Name)
 		}
+		if a.Widened != nil || a.WidenedBy != nil {
+			t.Fatalf("%s: widened %v by %v; it didn't widen", a.Name, a.Widened, a.WidenedBy)
+		}
 	}
 	if seen != len(want) {
 		t.Fatalf("coverage lists %d of this test's %d adapters", seen, len(want))
@@ -549,6 +556,56 @@ func TestCoverageAllTenants(t *testing.T) {
 	start(t, ext, nil)
 	if cov, _, _ := coverageOf(t, s); cov.Scope != "all_tenants" {
 		t.Fatalf("scope %q, want all_tenants", cov.Scope)
+	}
+}
+
+// An adapter whose own config takes it beyond staff says so through
+// Host.Widened, and the coverage snapshot shows it on that adapter and at
+// the top, while the scope itself stays staff.
+func TestCoverageWidened(t *testing.T) {
+	s := ingesttest.New(t)
+	var late adapter.Host
+	widens := fake("cov-widens", false, func(name string) func(context.Context, adapter.Host) (bool, error) {
+		return func(ctx context.Context, h adapter.Host) (bool, error) {
+			h.Widened("all_platform_users")
+			h.Widened("exclude_tenants")
+			h.Widened("all_platform_users")
+			late = h
+			return snapshotter(time.Hour, nil, nil)(name)(ctx, h)
+		}
+	})
+	plain := fake("cov-plain", false, snapshotter(time.Hour, nil, nil))
+	ext := witnessforge.New(witnessforge.WithConfig(on(s, widens, plain)), witnessforge.WithCoverageEvery(20*time.Millisecond))
+	start(t, ext, []string{widens, plain})
+
+	cov, _, _ := coverageOf(t, s)
+	if cov.Scope != "staff" {
+		t.Fatalf("scope %q, want staff", cov.Scope)
+	}
+	if cov.AnyWidened == nil || !*cov.AnyWidened {
+		t.Fatalf("any_widened %v, want true", cov.AnyWidened)
+	}
+	// A Widen after Attach returned is too late to report, and must not
+	// change the snapshot under the scheduler.
+	late.Widened("too_late")
+	for _, a := range cov.Adapters {
+		switch a.Name {
+		case widens:
+			if a.Widened == nil || !*a.Widened || !slices.Equal(a.WidenedBy, []string{"all_platform_users", "exclude_tenants"}) {
+				t.Fatalf("%s: widened %v by %v", a.Name, a.Widened, a.WidenedBy)
+			}
+		case plain:
+			if a.Widened != nil || a.WidenedBy != nil {
+				t.Fatalf("%s: widened %v by %v; it didn't widen", a.Name, a.Widened, a.WidenedBy)
+			}
+		}
+	}
+	// Give the coverage snapshot, every 20ms, a few more runs.
+	time.Sleep(150 * time.Millisecond)
+	for _, m := range s.Stored() {
+		if key(m) == witnessforge.CoverageKey && strings.Contains(string(m.Body), "too_late") {
+			t.Fatal("a Widen after Attach returned reached the coverage snapshot")
+		}
 	}
 }
 

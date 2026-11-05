@@ -64,6 +64,13 @@
 // staff or all_tenants. This is how Hallproof can tell you "this app runs
 // Trove, and no Trove evidence is arriving".
 //
+// An adapter's own options can take it beyond staff too, such as an
+// all_platform_users switch or extra Chronicle streams. The adapter reports
+// that through Host.Widened, and its entry gets widened: true and
+// widened_by, the config keys that did it. The snapshot then also carries
+// any_widened: true. The scope stays staff or all_tenants, because it's
+// still what you set; any_widened says that some adapter went further.
+//
 // # Discovery
 //
 // Chain adapters attach first, so the chain is bound before the rest attach.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
+	"sync"
 
 	"github.com/xraph/forge"
 
@@ -62,6 +64,7 @@ func (e *Extension) discoverAndStart(ctx context.Context, container forge.Contai
 
 	scope := cfg.Scope.scope()
 	results := make(map[string]map[string]any, len(all))
+	anyWidened := false
 	for _, a := range ordered {
 		entry := map[string]any{"name": a.Name, "module": a.Module, "found": false}
 		results[a.Name] = entry
@@ -74,6 +77,7 @@ func (e *Extension) discoverAndStart(ctx context.Context, container forge.Contai
 			alog.Info("witness: skipped an excluded adapter")
 			continue
 		}
+		wd := &widening{log: alog}
 		found, err := attach(ctx, a, adapter.Host{
 			Witness:   w,
 			Scope:     scope,
@@ -81,8 +85,15 @@ func (e *Extension) discoverAndStart(ctx context.Context, container forge.Contai
 			Container: container,
 			Config:    cfg.Adapters[a.Name],
 			SetChain:  e.setChain(a.Name, alog),
+			Widen:     wd.widen,
 		})
 		entry["found"] = found
+		if reasons := wd.close(); len(reasons) > 0 {
+			entry["widened"] = true
+			entry["widened_by"] = reasons
+			anyWidened = true
+			alog.Info("witness: an adapter's config takes it beyond staff", "widened_by", reasons)
+		}
 		switch {
 		case err != nil:
 			// The error text stays in the log; Hallproof only learns that
@@ -105,10 +116,15 @@ func (e *Extension) discoverAndStart(ctx context.Context, container forge.Contai
 		mode = scopeAllTenants
 	}
 	settings := map[string]any{"scope": mode, "adapters": adapters}
+	if anyWidened {
+		// The scope stays what the host set; this says that an adapter's
+		// own config went further, and its entry says how.
+		settings["any_widened"] = true
+	}
 	if err := w.Snapshot(collect.Snapshot{
 		Key:         CoverageKey,
 		Title:       "Witness coverage",
-		Description: "The libraries witness looks for in this app, which it found, and whose evidence it collects.",
+		Description: "The libraries witness looks for in this app, which it found, and whose evidence it collects. An adapter whose own config collects beyond staff is marked widened, with the config keys that did it.",
 		Every:       e.coverageEvery,
 		Collect:     func(context.Context) (map[string]any, error) { return settings, nil },
 	}); err != nil {
@@ -132,6 +148,39 @@ func attach(ctx context.Context, a adapter.Adapter, h adapter.Host) (found bool,
 		}
 	}()
 	return a.Attach(ctx, h)
+}
+
+// widening is one adapter's Host.Widen. It keeps each reason once, in the
+// order the adapter gave them, and ignores calls after Attach returned,
+// since the coverage snapshot is built by then.
+type widening struct {
+	log     *slog.Logger
+	mu      sync.Mutex
+	reasons []string
+	closed  bool
+}
+
+func (wd *widening) widen(reason string) {
+	wd.mu.Lock()
+	defer wd.mu.Unlock()
+	if wd.closed {
+		wd.log.Warn("witness: ignored Widen after the adapter attached", "reason", reason)
+		return
+	}
+	if reason == "" {
+		reason = "unspecified"
+	}
+	if !slices.Contains(wd.reasons, reason) {
+		wd.reasons = append(wd.reasons, reason)
+	}
+}
+
+// close stops taking reasons and returns them.
+func (wd *widening) close() []string {
+	wd.mu.Lock()
+	defer wd.mu.Unlock()
+	wd.closed = true
+	return wd.reasons
 }
 
 // setChain is the Host.SetChain for the adapter named by. A chain offered
