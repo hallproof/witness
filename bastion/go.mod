@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/hallproof/witness v0.2.0
 	github.com/xraph/bastion v1.4.1
+	github.com/xraph/forge v1.12.10
 	github.com/xraph/vessel v1.0.4
 )
 
@@ -83,7 +84,6 @@ require (
 	github.com/xraph/confy v1.1.0 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
-	github.com/xraph/forge v1.12.10 // indirect
 	github.com/xraph/go-utils v1.4.1 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.70.0 // indirect

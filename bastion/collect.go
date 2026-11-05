@@ -47,6 +47,10 @@ func (a *Adapter) collectRoutes(context.Context) ([]map[string]any, error) {
 // health monitor and proxy write a target's live fields (health, open
 // connections, circuit state, counters) while the gateway runs, so they
 // are never read: they'd race, and they'd change the item on every run.
+// UpdatedAt and Version aren't read either. AddRoute stamps UpdatedAt with
+// the current time, and UpdateRoute bumps both on every discovery poll, so
+// every replica and every restart would send a different item for the
+// same route.
 func (a *Adapter) route(cfg bst.Config, r *bst.Route) map[string]any {
 	required, skipped, providers := authOf(cfg.Auth, r.Auth)
 	var scopes []string
@@ -73,7 +77,6 @@ func (a *Adapter) route(cfg bst.Config, r *bst.Route) map[string]any {
 		"service_name": r.ServiceName,
 		"enabled":      r.Enabled,
 		"priority":     r.Priority,
-		"version":      r.Version,
 
 		"auth_required":  required,
 		"auth_providers": providers,
@@ -99,7 +102,6 @@ func (a *Adapter) route(cfg bst.Config, r *bst.Route) map[string]any {
 		"cache_enabled":           cfg.Caching.Enabled,
 		"retry_enabled":           retry,
 		"circuit_breaker_enabled": cfg.CircuitBreaker.Enabled,
-		"updated_at":              stamp(r.UpdatedAt),
 	}
 	if r.Transform != nil {
 		it["transform"] = map[string]any{
@@ -292,12 +294,10 @@ func secure(scheme string) bool {
 func (a *Adapter) collectGateway(context.Context) (map[string]any, error) {
 	cfg := a.gw.Config()
 
-	var lastReload any
-	if tm := a.gw.TLS(); tm != nil && cfg.TLS.Enabled {
-		if at := tm.LastReload(); !at.IsZero() {
-			lastReload = stamp(at)
-		}
-	}
+	// The TLS manager's last reload time isn't sent. It's per process,
+	// changes on every reload tick, and the reload loop writes it without
+	// a lock. The configured interval says the same thing about your
+	// control and is the same on every replica.
 	var routeCount any
 	if rm := a.gw.RouteManager(); rm != nil {
 		routeCount = rm.RouteCount()
@@ -319,7 +319,8 @@ func (a *Adapter) collectGateway(context.Context) (map[string]any, error) {
 			"insecure_skip_verify": cfg.TLS.InsecureSkipVerify,
 			"cipher_suites":        names(cfg.TLS.CipherSuites),
 			"mtls":                 cfg.TLS.ClientCertFile != "",
-			"last_reload":          lastReload,
+			// 0 means certificates are never reloaded.
+			"reload_interval_seconds": int64(cfg.TLS.ReloadInterval / time.Second),
 		},
 		"rate_limiting": map[string]any{
 			"enabled":          cfg.RateLimiting.Enabled,
@@ -355,12 +356,4 @@ func (a *Adapter) collectGateway(context.Context) (map[string]any, error) {
 		"max_request_body_bytes": cfg.BufferPool.MaxRequestBodySize,
 		"route_count":            routeCount,
 	}, nil
-}
-
-// stamp is t in UTC to the second, or nil for the zero time.
-func stamp(t time.Time) any {
-	if t.IsZero() {
-		return nil
-	}
-	return t.UTC().Truncate(time.Second).Format(time.RFC3339)
 }

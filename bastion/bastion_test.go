@@ -12,6 +12,7 @@ import (
 
 	bst "github.com/xraph/bastion"
 	"github.com/xraph/bastion/routing"
+	forgetesting "github.com/xraph/forge/testing"
 	"github.com/xraph/vessel"
 
 	"github.com/hallproof/witness"
@@ -19,8 +20,6 @@ import (
 	"github.com/hallproof/witness/collect"
 	"github.com/hallproof/witness/ingesttest"
 )
-
-var t0 = time.Date(2026, 11, 1, 9, 30, 15, 123456789, time.UTC)
 
 // newGateway builds a gateway the way gateway.Wire leaves it for the
 // adapter: config from options, and an in-memory route table.
@@ -35,7 +34,9 @@ func newGateway(t *testing.T, opts ...bst.ConfigOption) (*bst.Gateway, *routing.
 	return gw, rm
 }
 
-// addRoute adds r and pins its update time, which AddRoute sets to now.
+// addRoute adds r the way the gateway does. AddRoute stamps the route
+// with the current time, and the helper leaves that alone, so a test sees
+// what a real gateway would send.
 func addRoute(t *testing.T, rm *routing.Manager, r *bst.Route) {
 	t.Helper()
 	if r.Source == "" {
@@ -47,7 +48,6 @@ func addRoute(t *testing.T, rm *routing.Manager, r *bst.Route) {
 	if err := rm.AddRoute(r); err != nil {
 		t.Fatal(err)
 	}
-	r.UpdatedAt = t0
 }
 
 type collected struct {
@@ -235,7 +235,7 @@ func TestRoutes(t *testing.T) {
 	assertJSON(t, got[1], map[string]any{
 		"id": "manual-api-/api", "path": "/api", "methods": []string{"GET", "POST"},
 		"protocol": "http", "source": "manual", "service_name": "api",
-		"enabled": true, "priority": 10, "version": 3,
+		"enabled": true, "priority": 10,
 		"auth_required": true, "auth_providers": []string{"jwt"}, "auth_scopes": []string{"read", "write"},
 		"auth_skipped": false, "forward_auth": true,
 		"rate_limit_global": globalRL,
@@ -256,7 +256,6 @@ func TestRoutes(t *testing.T) {
 		"cache_enabled":           false,
 		"retry_enabled":           true,
 		"circuit_breaker_enabled": true,
-		"updated_at":              "2026-11-01T09:30:15Z",
 	})
 	// A discovery route sends a summary of its targets, not the list,
 	// because pod addresses churn.
@@ -366,7 +365,7 @@ func TestGateway(t *testing.T) {
 	gw, rm := newGateway(t,
 		bst.WithBasePath("/gw"),
 		bst.WithAuth(bst.AuthConfig{Enabled: true, DefaultPolicy: "deny", Providers: []string{"jwt", "apikey"}, ForwardHeaders: true}),
-		bst.WithTLS(bst.TLSConfig{Enabled: true, MinVersion: "1.3", CipherSuites: []string{"TLS_AES_128_GCM_SHA256"}, ClientCertFile: "/etc/c.pem", ClientKeyFile: "/etc/k.pem"}),
+		bst.WithTLS(bst.TLSConfig{Enabled: true, MinVersion: "1.3", CipherSuites: []string{"TLS_AES_128_GCM_SHA256"}, ClientCertFile: "/etc/c.pem", ClientKeyFile: "/etc/k.pem", ReloadInterval: time.Hour}),
 		bst.WithRateLimiting(bst.RateLimitConfig{Enabled: true, RequestsPerSec: 50, Burst: 75, PerClient: true, KeyHeader: "X-Client"}),
 		bst.WithIPFilter(bst.IPFilterConfig{Enabled: true, AllowIPs: []string{"10.0.0.0/8", "192.168.0.0/16"}, DenyIPs: []string{"10.9.9.9"}}),
 		bst.WithCORS(bst.CORSConfig{Enabled: true, AllowOrigins: []string{"https://app.example.com", "*"}, AllowCreds: true}),
@@ -383,7 +382,7 @@ func TestGateway(t *testing.T) {
 		"auth": map[string]any{"enabled": true, "default_policy": "deny", "providers": []string{"apikey", "jwt"}, "forward_headers": true},
 		"upstream_tls": map[string]any{
 			"enabled": true, "min_version": "1.3", "insecure_skip_verify": false,
-			"cipher_suites": []string{"TLS_AES_128_GCM_SHA256"}, "mtls": true, "last_reload": nil,
+			"cipher_suites": []string{"TLS_AES_128_GCM_SHA256"}, "mtls": true, "reload_interval_seconds": 3600,
 		},
 		"rate_limiting": map[string]any{"enabled": true, "requests_per_sec": 50, "burst": 75, "per_client": true, "key_header": "X-Client"},
 		"ip_filter":     map[string]any{"enabled": true, "allow_count": 2, "deny_count": 1},
@@ -395,6 +394,96 @@ func TestGateway(t *testing.T) {
 		"access_log_enabled": true, "discovery_enabled": false, "routes_persisted": false,
 		"max_request_body_bytes": 10 * 1024 * 1024, "route_count": 2,
 	})
+}
+
+// Two replicas built from the same config, one an hour after the other,
+// and one whose discovery poll has re-applied the route since, must send
+// the same routes. Bastion stamps UpdatedAt on every AddRoute and bumps
+// UpdatedAt and Version on every UpdateRoute, discovery polls included, so
+// neither field can go out: N replicas would send N different
+// populations, and a discovery gateway would re-send forever.
+func TestRoutesSameAcrossReplicas(t *testing.T) {
+	build := func() (*bst.Gateway, *routing.Manager, *bst.Route) {
+		gw, rm := newGateway(t, bst.WithAuth(bst.AuthConfig{Enabled: true, Providers: []string{"apikey"}}))
+		r := &bst.Route{ID: "users", Path: "/users", Source: bst.SourceDiscovery, ServiceName: "users", Enabled: true,
+			Targets: []*bst.Target{{ID: "p1", URL: "http://10.1.0.7:80"}}}
+		addRoute(t, rm, r)
+		return gw, rm, r
+	}
+	early, _, r := build()
+	// The first replica started an hour ago.
+	r.CreatedAt = r.CreatedAt.Add(-time.Hour)
+	r.UpdatedAt = r.UpdatedAt.Add(-time.Hour)
+
+	late, rm, r2 := build()
+	// A discovery poll re-applies the same route.
+	again := *r2
+	if err := rm.UpdateRoute(&again); err != nil {
+		t.Fatal(err)
+	}
+
+	a, b := items(t, New(early)), items(t, New(late))
+	ja, err := json.Marshal(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jb, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ja) != string(jb) {
+		t.Fatalf("replicas differ:\n%s\n%s", ja, jb)
+	}
+	for _, k := range []string{"updated_at", "version"} {
+		if _, ok := a[0][k]; ok {
+			t.Errorf("item has %q", k)
+		}
+	}
+}
+
+// Two replicas with the same TLS config must send the same snapshot. The
+// TLS manager's last reload is per process and changes on every reload
+// tick (and is read without a lock), so it isn't sent; the configured
+// reload interval is.
+func TestGatewaySameAcrossReplicas(t *testing.T) {
+	build := func() *bst.Gateway {
+		gw, ok := bst.New(bst.WithTLS(bst.TLSConfig{Enabled: true, MinVersion: "1.2", ReloadInterval: time.Hour})).(*bst.Gateway)
+		if !ok {
+			t.Fatal("bastion.New did not return *bastion.Gateway")
+		}
+		if err := gw.Register(forgetesting.NewTestApp("replica", "v0")); err != nil {
+			t.Fatal(err)
+		}
+		gw.SetRouteRegistry(routing.NewManager())
+		if gw.TLS() == nil {
+			t.Fatal("no TLS manager after Register")
+		}
+		return gw
+	}
+	early := build()
+	// Wait for the clock to pass the next whole second, so a reload time
+	// would differ between the two.
+	time.Sleep(time.Until(time.Now().Truncate(time.Second).Add(time.Second + 10*time.Millisecond)))
+	late := build()
+
+	ja, err := json.Marshal(settings(t, New(early)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jb, err := json.Marshal(settings(t, New(late)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ja) != string(jb) {
+		t.Fatalf("replicas differ:\n%s\n%s", ja, jb)
+	}
+	tlsBlock := settings(t, New(late))["upstream_tls"].(map[string]any)
+	if _, ok := tlsBlock["last_reload"]; ok {
+		t.Error("upstream_tls has last_reload")
+	}
+	if tlsBlock["reload_interval_seconds"] != int64(3600) {
+		t.Errorf("reload_interval_seconds = %#v, want 3600", tlsBlock["reload_interval_seconds"])
+	}
 }
 
 func TestGatewayOpenAdmin(t *testing.T) {

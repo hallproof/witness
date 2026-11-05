@@ -8,7 +8,7 @@
 // bastion.routes is a population of every route in the gateway's live
 // route table, every 15 minutes. Each item has the route's ID, path,
 // methods, protocol, source (manual, farp or discovery), service name,
-// priority, version and whether it's enabled. Then the parts you'd check in
+// priority and whether it's enabled. Then the parts you'd check in
 // an audit: whether the route requires authentication (auth_required), the
 // provider names that would be tried, the scope names it asks for, whether
 // it opts out of auth (auth_skipped), and whether it forwards auth context
@@ -19,7 +19,10 @@
 // for the route's header rules and its transform. A traffic policy goes as
 // its type, its rule count and, for mirroring, the origin traffic is copied
 // to. Last come whether the response cache, retries and circuit breakers
-// are on for the route, and when the route last changed. No Hallproof test
+// are on for the route. The route's version and update time aren't sent:
+// Bastion stamps them when a gateway starts and bumps them on every
+// discovery poll, so they'd differ between replicas and change on every
+// run without anything changing. No Hallproof test
 // uses it outright yet; it's the context behind tls-enforced on the
 // upstream hop.
 //
@@ -32,7 +35,8 @@
 // bastion.gateway is a snapshot of the gateway's settings, every 15
 // minutes: auth (on or off, default policy, provider names), upstream TLS
 // (minimum version, cipher suites, whether certificate checks are skipped,
-// whether a client certificate is set, and the last reload), rate limiting,
+// whether a client certificate is set, and how often certificates are
+// reloaded, in seconds, with 0 for never), rate limiting,
 // IP filtering as counts, CORS, the admin API (on or off, base path,
 // whether a token or auth middleware guards it, and whether you've said
 // it's fine unguarded), and the access log, discovery, route persistence,
@@ -129,7 +133,8 @@
 //     circuit_breaker_enabled and cache_enabled are the gateway-wide
 //     settings.
 //   - TLSManager.LastReload reads a time the reload loop writes without a
-//     lock, so it can race when tls.reload_interval is set.
+//     lock, so it can race when tls.reload_interval is set. It's also per
+//     process, so the adapter sends the configured interval instead.
 //   - The extension reports its version as "1.0.0" whatever the tag, so
 //     read the module version from build info if you need it.
 //   - Hallproof has no test key for "public routes require authentication"
