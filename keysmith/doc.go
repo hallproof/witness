@@ -99,6 +99,9 @@
 //		return err
 //	}
 //
+// Register adds every collector or none. If one fails, say because its key
+// is already taken, the ones it added before are removed again.
+//
 // # Library gaps
 //
 // These are things keysmith (v1.8.1 here, unchanged in v1.9.0) doesn't do

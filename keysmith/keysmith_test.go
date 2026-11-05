@@ -735,3 +735,33 @@ func TestAttachExtensionWithoutEngine(t *testing.T) {
 		t.Errorf("%s was registered with no engine", KeyAPIKeys)
 	}
 }
+
+func TestAttachFailingPartWayRegistersNothing(t *testing.T) {
+	f := newFixture(t)
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.eng); err != nil {
+		t.Fatal(err)
+	}
+	w := newWitness(t)
+	// The event proof is the last collector keysmith adds; its key is taken.
+	if err := w.Snapshot(collect.Snapshot{Key: KeyLifecycleProof, Title: "squatter", Collect: func(context.Context) (map[string]any, error) { return nil, nil }}); err != nil {
+		t.Fatal(err)
+	}
+	found, err := attach(context.Background(), adapter.Host{
+		Witness:   w,
+		Scope:     adapter.Scope{AppID: platformApp, TenantID: "platform"},
+		Container: c,
+		Config:    map[string]any{"staff_tenants": []any{staff}, "event_proofs": true},
+	})
+	if !found || err == nil {
+		t.Fatalf("attach = %v, %v; want true and the duplicate key's error", found, err)
+	}
+	for _, k := range []string{KeyAPIKeys, KeyPolicies, KeyRotation} {
+		if w.Remove(k) {
+			t.Errorf("%s stayed registered after attach failed", k)
+		}
+	}
+	if !w.Remove(KeyLifecycleProof) {
+		t.Error("attach removed a collector it didn't add")
+	}
+}
