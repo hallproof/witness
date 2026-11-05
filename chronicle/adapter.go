@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	xchronicle "github.com/xraph/chronicle"
 	"github.com/xraph/chronicle/checkpoint"
@@ -95,15 +94,21 @@ func (c *Chain) Register(w *witness.Witness) error {
 	return w.Snapshot(c.PlatformSnapshot())
 }
 
-// PlatformSnapshot is a snapshot of the platform stream's state: its head
-// sequence and digest scheme, its newest checkpoint (ID, time, end, key
-// and algorithm), and how many events have been recorded since that
-// checkpoint. It backs audit-chain-verifies.
+// PlatformSnapshot is a snapshot of the platform stream's posture: its ID
+// and digest scheme, whether it has a signed checkpoint, the newest
+// checkpoint's key and algorithm, and whether the events recorded since
+// that checkpoint still fit in one proof segment. It backs
+// audit-chain-verifies.
+//
+// It leaves out what moves with every event or checkpoint (the head
+// sequence, the checkpoint's ID, time and end, the exact lag), so its hash
+// changes only when the posture does and witness doesn't push it again on
+// every run.
 func (c *Chain) PlatformSnapshot() collect.Snapshot {
 	return collect.Snapshot{
 		Key:         SnapshotKey,
 		Title:       "Platform audit chain",
-		Description: "The platform's Chronicle stream: its head, its newest signed checkpoint, and events not yet checkpointed.",
+		Description: "The platform's Chronicle stream: its digest scheme, its checkpoint signing key and algorithm, and whether the events not yet checkpointed fit in one proof segment.",
 		Tests:       []string{"audit-chain-verifies"},
 		Collect:     c.platformSettings,
 	}
@@ -121,7 +126,6 @@ func (c *Chain) platformSettings(ctx context.Context) (map[string]any, error) {
 	}
 	out["stream_id"] = st.ID.String()
 	out["hash_scheme"] = st.Scheme
-	out["head_sequence"] = st.HeadSeq
 	cp, err := c.checkpoints.LatestCheckpoint(ctx, st.ID)
 	if errors.Is(err, checkpoint.ErrNotFound) {
 		out["checkpointed"] = false
@@ -135,11 +139,10 @@ func (c *Chain) platformSettings(ctx context.Context) (map[string]any, error) {
 		lag = st.HeadSeq - cp.ToSeq
 	}
 	out["checkpointed"] = true
-	out["last_checkpoint_id"] = cp.ID.String()
-	out["last_checkpoint_at"] = cp.CreatedAt.UTC().Format(time.RFC3339Nano)
-	out["last_checkpoint_to_sequence"] = cp.ToSeq
-	out["lag_events"] = lag
 	out["sign_key_id"] = cp.SignKeyID
 	out["algorithm"] = cp.Algorithm
+	// A bucket, not the count: it flips only when checkpoints fall so far
+	// behind that the waiting events no longer fit in one segment.
+	out["lag_within_segment"] = lag <= uint64(c.maxSegment) // #nosec G115 -- maxSegment is between 1 and push.MaxSegment
 	return out, nil
 }

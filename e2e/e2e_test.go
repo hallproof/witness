@@ -47,7 +47,7 @@ func TestForgeAppPushesEvidence(t *testing.T) {
 
 	tr := newTrail(t)
 	tr.recordBefore("api_key.created", "user.login")
-	cp := tr.checkpoint()
+	tr.checkpoint()
 	kr := newKeyring(t)
 	vs := newVault(t)
 
@@ -154,8 +154,11 @@ func TestForgeAppPushesEvidence(t *testing.T) {
 		if st["checkpointed"] != true {
 			t.Fatalf("checkpointed = %v, want true; settings %v", st["checkpointed"], st)
 		}
-		if st["last_checkpoint_id"] != cp.ID.String() {
-			t.Errorf("last_checkpoint_id = %v, want %s", st["last_checkpoint_id"], cp.ID)
+		if st["lag_within_segment"] != true {
+			t.Errorf("lag_within_segment = %v, want true", st["lag_within_segment"])
+		}
+		if _, churns := st["last_checkpoint_id"]; churns {
+			t.Errorf("the snapshot carries last_checkpoint_id, which changes with every checkpoint")
 		}
 		if st["sign_key_id"] != tr.keyID {
 			t.Errorf("sign_key_id = %v, want %s", st["sign_key_id"], tr.keyID)

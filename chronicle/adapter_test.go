@@ -2,6 +2,8 @@ package chronicle_test
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"slices"
 	"strings"
 	"sync"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	xchronicle "github.com/xraph/chronicle"
+	"github.com/xraph/chronicle/checkpoint"
 	"github.com/xraph/vessel"
 
 	"github.com/hallproof/witness"
@@ -238,21 +241,20 @@ func TestPlatformStreamSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings["head_sequence"] != uint64(3) || settings["checkpointed"] != false || settings["hash_scheme"] != "chronicle/v4" {
+	if settings["checkpointed"] != false || settings["hash_scheme"] != "chronicle/v4" || len(settings) != 5 {
 		t.Fatalf("no checkpoint yet: %v", settings)
 	}
 
-	cp := f.checkpoint()
+	f.checkpoint()
 	f.record(2, "user.login", nil)
 	settings, err = snap.Collect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Posture only: nothing that moves with every event or checkpoint.
 	want := map[string]any{
 		"app_id": appID, "tenant_id": tenantID, "stream_id": f.stream().ID.String(), "hash_scheme": "chronicle/v4",
-		"head_sequence": uint64(5), "checkpointed": true, "last_checkpoint_id": cp.ID.String(),
-		"last_checkpoint_at": cp.CreatedAt.UTC().Format(time.RFC3339Nano), "last_checkpoint_to_sequence": uint64(3),
-		"lag_events": uint64(2), "sign_key_id": f.keyID, "algorithm": "ed25519",
+		"checkpointed": true, "sign_key_id": f.keyID, "algorithm": "ed25519", "lag_within_segment": true,
 	}
 	for k, v := range want {
 		if settings[k] != v {
@@ -261,5 +263,62 @@ func TestPlatformStreamSnapshot(t *testing.T) {
 	}
 	if len(settings) != len(want) {
 		t.Errorf("settings %v", settings)
+	}
+}
+
+// settingsHash collects snap and returns the hash witness sends with it.
+func settingsHash(t *testing.T, snap collect.Snapshot) string {
+	t.Helper()
+	settings, err := snap.Collect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := push.SnapshotHash(settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+// The snapshot changes only when the stream's posture does, not with every
+// event or checkpoint, so witness doesn't push it again on every run.
+func TestPlatformStreamSnapshotIsStable(t *testing.T) {
+	f := newFixture(t, wchronicle.WithMaxSegment(5))
+	snap := f.chain.PlatformSnapshot()
+	f.record(3, "user.login", nil)
+	f.checkpoint()
+	f.record(2, "user.login", nil)
+	first := settingsHash(t, snap)
+
+	f.record(4, "user.login", nil)
+	f.checkpoint()
+	f.record(1, "user.login", nil)
+	if got := settingsHash(t, snap); got != first {
+		t.Fatal("new events and a new checkpoint changed the snapshot; posture didn't change")
+	}
+
+	// More events waiting than one segment holds.
+	f.record(5, "user.login", nil)
+	if got := settingsHash(t, snap); got == first {
+		t.Fatal("6 events past the checkpoint, more than max_segment 5, didn't change the snapshot")
+	}
+
+	// A checkpoint signed with another key.
+	f.checkpoint()
+	first = settingsHash(t, snap)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := checkpoint.NewCheckpointer(f.mem, checkpoint.NewEd25519Signer(keyProvider{id: "ckpt-test-2", priv: priv}), nil)
+	f.record(1, "user.login", nil)
+	st := f.stream()
+	if _, err = other.CheckpointStream(context.Background(), checkpoint.StreamHead{
+		ID: st.ID, AppID: st.AppID, TenantID: st.TenantID, HeadSeq: st.HeadSeq, HeadHash: st.HeadHash,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := settingsHash(t, snap); got == first {
+		t.Fatal("a checkpoint under a new key didn't change the snapshot")
 	}
 }

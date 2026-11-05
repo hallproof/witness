@@ -63,9 +63,13 @@
 // other content out of the metadata.
 //
 // The chronicle.platform-stream snapshot (test audit-chain-verifies) sends
-// the platform stream's ID, digest scheme and head sequence, and its newest
-// checkpoint's ID, time, end sequence, key ID and algorithm, plus how many
-// events were recorded after it. No event content.
+// the platform stream's posture: its app and tenant, its ID and digest
+// scheme, whether it has a checkpoint, the newest checkpoint's key ID and
+// algorithm, and lag_within_segment, which is false once more events wait
+// past that checkpoint than one segment holds. No event content. It leaves
+// out the head sequence, the checkpoint's ID and time, and the exact lag on
+// purpose: they change with every event or checkpoint, so witness would
+// push the snapshot again on every run for no change in posture.
 //
 // # Options
 //
