@@ -61,6 +61,11 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if h.Witness == nil {
 		return true, errors.New("witness/chronicle: the host has no witness")
 	}
+	if len(cfg.Streams) > 0 {
+		// Prove can now prove streams beyond the platform's, which can be
+		// customer tenants' streams.
+		h.Widened("streams")
+	}
 	h.SetChain(c)
 	return true, c.Register(h.Witness)
 }
@@ -104,11 +109,23 @@ func (c *Chain) Register(w *witness.Witness) error {
 // sequence, the checkpoint's ID, time and end, the exact lag), so its hash
 // changes only when the posture does and witness doesn't push it again on
 // every run.
+//
+// When the chain has streams besides the platform's (WithStream, or the
+// adapter's streams config), the description says how many, so Hallproof
+// shows that Prove reaches beyond the platform stream. It never names them.
 func (c *Chain) PlatformSnapshot() collect.Snapshot {
+	desc := "The platform's Chronicle stream: its digest scheme, its checkpoint signing key and algorithm, and whether the events not yet checkpointed fit in one proof segment."
+	// New always adds Platform itself; count the others.
+	switch n := len(c.streams) - 1; {
+	case n == 1:
+		desc += " Event proofs can also come from 1 more stream, which may be a customer tenant's."
+	case n > 1:
+		desc += fmt.Sprintf(" Event proofs can also come from %d more streams, which may be customer tenants'.", n)
+	}
 	return collect.Snapshot{
 		Key:         SnapshotKey,
 		Title:       "Platform audit chain",
-		Description: "The platform's Chronicle stream: its digest scheme, its checkpoint signing key and algorithm, and whether the events not yet checkpointed fit in one proof segment.",
+		Description: desc,
 		Tests:       []string{"audit-chain-verifies"},
 		Collect:     c.platformSettings,
 	}

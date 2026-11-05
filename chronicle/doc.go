@@ -87,6 +87,12 @@
 //	        streams:
 //	          billing: {app_id: platform, tenant_id: billing-staff}
 //
+// Extra streams let event proofs reach beyond the platform stream, and a
+// stream can be a customer tenant's. So when streams names any, the adapter
+// tells witness/forge it widened (Host.Widened("streams")), the coverage
+// snapshot marks it widened, and the platform-stream snapshot's description
+// says how many more streams Prove takes, without naming them.
+//
 // # Gaps in Chronicle
 //
 // You don't need a Chronicle change for any of this, but three would help.

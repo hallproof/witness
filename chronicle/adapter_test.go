@@ -213,6 +213,44 @@ func TestAttach(t *testing.T) {
 	}
 }
 
+// Extra streams let Prove reach streams beyond the platform's, so the
+// adapter tells the host it widened, and the snapshot's description says so.
+func TestAttachWidensForStreams(t *testing.T) {
+	for _, streams := range []map[string]any{nil, {"billing": map[string]any{"app_id": appID, "tenant_id": "billing"}}} {
+		f := newFixture(t)
+		c := vessel.New()
+		if err := vessel.ProvideValue(c, f.trail); err != nil {
+			t.Fatal(err)
+		}
+		h, _, _, lazy := host(t, c)
+		var widened []string
+		h.Widen = func(r string) { widened = append(widened, r) }
+		if streams != nil {
+			h.Config = map[string]any{"streams": streams}
+		}
+		if found, err := registered(t).Attach(context.Background(), h); !found || err != nil {
+			t.Fatalf("found %v, err %v", found, err)
+		}
+		bound, ok := lazy.get().(*wchronicle.Chain)
+		if !ok {
+			t.Fatalf("bound %T, want *Chain", lazy.get())
+		}
+		desc := bound.PlatformSnapshot().Description
+		if streams == nil {
+			if widened != nil || strings.Contains(desc, "streams") {
+				t.Fatalf("no streams: widened %v, description %q", widened, desc)
+			}
+			continue
+		}
+		if !slices.Equal(widened, []string{"streams"}) {
+			t.Fatalf("widened %v, want [streams]", widened)
+		}
+		if !strings.Contains(desc, "1 more stream") || strings.Contains(desc, "billing") {
+			t.Fatalf("description %q should count the extra streams and name none", desc)
+		}
+	}
+}
+
 func TestPlatformStreamSnapshot(t *testing.T) {
 	f := newFixture(t)
 	s := ingesttest.New(t)
