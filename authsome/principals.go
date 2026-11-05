@@ -15,7 +15,7 @@ func (a *Adapter) serviceAccounts() collect.Population {
 	return collect.Population{
 		Key:         "authsome.service-accounts",
 		Title:       "Service accounts",
-		Description: "Every non-human principal in the platform app that staff own or that belongs to no organisation, with its kind, owner, scopes and expiry. Rows of kind agent are agent principals.",
+		Description: a.scoped("Every non-human principal in the platform app that staff own, or that belongs to no organisation and has no owner, with its kind, owner, scopes and expiry. Rows of kind agent are agent principals."),
 		Source:      "service-accounts",
 		Tests:       []string{"no-shared-accounts", "agent-has-owner", "agent-owner-active", "no-orphaned-agents"},
 		Every:       every,
@@ -63,8 +63,8 @@ func kindOf(s *serviceaccount.ServiceAccount) principal.Kind {
 }
 
 // scopedServiceAccounts are the platform app's service accounts that staff
-// own or that belong to no organisation; every one of them under
-// AllTenants.
+// own, or that belong to no organisation and have no owner; every one of
+// them under AllTenants. An org-less account a customer owns stays out.
 func (a *Adapter) scopedServiceAccounts(ctx context.Context, st *staff) ([]*serviceaccount.ServiceAccount, error) {
 	all, err := pages(func(cursor string) ([]*serviceaccount.ServiceAccount, string, error) {
 		l, err := a.eng.Store().ListServiceAccounts(ctx, &serviceaccount.Query{AppID: st.app, Limit: pageSize, Cursor: cursor})
@@ -83,7 +83,7 @@ func (a *Adapter) scopedServiceAccounts(ctx context.Context, st *staff) ([]*serv
 			continue
 		}
 		seen[s.ID.String()] = true
-		if a.scope.AllTenants || st.has(s.OwnerUserID) || s.OrgID.IsNil() {
+		if a.scope.AllTenants || st.has(s.OwnerUserID) || (s.OrgID.IsNil() && s.OwnerUserID.IsNil()) {
 			out = append(out, s)
 		}
 	}
@@ -99,7 +99,7 @@ func (a *Adapter) agentGrants() collect.Population {
 	return collect.Population{
 		Key:         "authsome.agent-grants",
 		Title:       "Agent grants",
-		Description: desc,
+		Description: a.scoped(desc),
 		Source:      "agent-grants",
 		Tests:       []string{"grant-has-expiry", "grant-scopes-used", "agent-owner-active"},
 		Every:       every,
@@ -222,7 +222,7 @@ func (a *Adapter) agents() collect.Population {
 	return collect.Population{
 		Key:         "authsome.agents",
 		Title:       "Registered agents (agentauth)",
-		Description: "Every agent registered with the platform app that staff registered or that belongs to no organisation, with its status and who registered it.",
+		Description: a.scoped("Every agent registered with the platform app that staff registered, or that belongs to no organisation and nobody registered, with its status and who registered it."),
 		Source:      "agents",
 		Tests:       []string{"agent-has-owner", "agent-owner-active", "no-orphaned-agents"},
 		Every:       every,
@@ -245,7 +245,9 @@ func (a *Adapter) collectAgents(ctx context.Context) ([]map[string]any, error) {
 	}
 	items := make([]map[string]any, 0, len(all))
 	for _, ag := range all {
-		if !a.scope.AllTenants && !st.has(ag.CreatedBy) && !ag.OrgID.IsNil() {
+		// In scope: staff registered it, or it has no organisation and
+		// nobody registered it. A customer's org-less agent stays out.
+		if !a.scope.AllTenants && !st.has(ag.CreatedBy) && (!ag.OrgID.IsNil() || !ag.CreatedBy.IsNil()) {
 			continue
 		}
 		items = append(items, map[string]any{

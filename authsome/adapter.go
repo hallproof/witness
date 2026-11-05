@@ -51,7 +51,13 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return true, err
 	}
-	return true, New(eng, WithScope(h.Scope), WithOptions(o), WithLogger(h.Logger)).Register(h.Witness)
+	if err := New(eng, WithScope(h.Scope), WithOptions(o), WithLogger(h.Logger)).Register(h.Witness); err != nil {
+		return true, err
+	}
+	if o.AllPlatformUsers {
+		h.Widened("all_platform_users")
+	}
+	return true, nil
 }
 
 // Options are the adapter's switches. In a Forge app they come from

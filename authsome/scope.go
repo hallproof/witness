@@ -45,12 +45,25 @@ func (s *staff) has(uid id.UserID) bool { return !uid.IsNil() && s.set[uid.Strin
 // allUsers reports whether every platform-app user is staff.
 func (a *Adapter) allUsers() bool { return a.opts.AllPlatformUsers || a.scope.AllTenants }
 
-// staffRule says, for logs and the package doc, who counts as staff.
+// staffRule says, for logs and collector descriptions, who counts as
+// staff.
 func (a *Adapter) staffRule() string {
-	if a.allUsers() {
-		return "every platform-app user"
+	switch {
+	case a.opts.AllPlatformUsers:
+		return "every platform-app user, because all_platform_users is on"
+	case a.scope.AllTenants:
+		return "every platform-app user, because the scope covers all tenants"
 	}
 	return "holds " + strings.Join(a.scope.Roles(), " or ")
+}
+
+// scoped adds the staff rule to a collector's description when it reaches
+// beyond staff roles, so Hallproof shows which rule was on.
+func (a *Adapter) scoped(desc string) string {
+	if !a.allUsers() {
+		return desc
+	}
+	return desc + " Staff means " + a.staffRule() + "."
 }
 
 // appID is the platform app: the scope's AppID when set, else the app
@@ -157,6 +170,11 @@ func (a *Adapter) staffByRoles(ctx context.Context, s *staff) error {
 				}
 				for _, h := range held {
 					if h.ExpiresAt != nil && !h.ExpiresAt.After(now) {
+						continue
+					}
+					// A role held on one resource doesn't make its holder
+					// staff. Authsome's ListRolesForSubject skips these too.
+					if h.ResourceType != "" {
 						continue
 					}
 					uid, err := id.ParseUserID(h.SubjectID)

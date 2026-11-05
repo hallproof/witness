@@ -181,7 +181,7 @@ func (a *Adapter) staffSessions() collect.Population {
 	return collect.Population{
 		Key:         "authsome.staff-sessions",
 		Title:       "Staff sessions",
-		Description: "Every live session held by a staff account, so access that outlives a leaver shows up.",
+		Description: a.scoped("Every live session held by a staff account, so access that outlives a leaver shows up."),
 		Source:      "staff-sessions",
 		Tests:       []string{"no-active-leavers"},
 		Every:       every,
@@ -235,7 +235,7 @@ func (a *Adapter) staffAPIKeys() collect.Population {
 	return collect.Population{
 		Key:         "authsome.staff-api-keys",
 		Title:       "Staff API keys (Authsome)",
-		Description: "Authsome API keys owned by staff accounts or by the platform's service accounts.",
+		Description: a.scoped("Authsome API keys owned by staff accounts or by the platform's service accounts."),
 		Source:      "staff-api-keys",
 		Tests:       []string{"keys-rotated", "no-active-leavers"},
 		Every:       every,

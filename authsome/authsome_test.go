@@ -19,6 +19,8 @@ import (
 	"github.com/xraph/authsome/store/memory"
 	"github.com/xraph/authsome/user"
 	"github.com/xraph/vessel"
+	wardenassign "github.com/xraph/warden/assignment"
+	wardenid "github.com/xraph/warden/id"
 
 	"github.com/hallproof/witness"
 	"github.com/hallproof/witness/adapter"
@@ -580,5 +582,117 @@ func TestNeverSendsContent(t *testing.T) {
 	out.WriteString(mustJSON(t, b.proofs))
 	if strings.Contains(out.String(), "CANARY") {
 		t.Fatalf("collected output carries a canary: %s", out.String())
+	}
+}
+
+func TestAttachReportsWidening(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.eng); err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct {
+		cfg  map[string]any
+		want []string
+	}{
+		"default":            {nil, nil},
+		"all platform users": {map[string]any{"all_platform_users": true}, []string{"all_platform_users"}},
+	} {
+		var got []string
+		found, err := registered(t).Attach(context.Background(), adapter.Host{
+			Witness:   newWitness(t),
+			Container: c,
+			Config:    tc.cfg,
+			Widen:     func(r string) { got = append(got, r) },
+		})
+		if !found || err != nil {
+			t.Fatalf("%s: found=%v err=%v", name, found, err)
+		}
+		if !slices.Equal(got, tc.want) {
+			t.Errorf("%s: Widen got %v, want %v", name, got, tc.want)
+		}
+	}
+}
+
+func TestWidenedDescriptions(t *testing.T) {
+	f := newFixture(t, fixtureOpts{plugins: true})
+	scoped := []string{
+		"authsome.staff-users", "authsome.staff-sessions", "authsome.staff-api-keys",
+		"authsome.service-accounts", "authsome.agent-grants", "authsome.agents",
+	}
+	wide := build(t, New(f.eng, WithAPIKeys(), WithAllPlatformUsers()))
+	narrow := build(t, New(f.eng, WithAPIKeys()))
+	for _, k := range scoped {
+		if d := wide.pops[k].Description; !strings.Contains(d, "every platform-app user") || !strings.Contains(d, "all_platform_users") {
+			t.Errorf("%s widened: description %q doesn't give the rule", k, d)
+		}
+		if d := narrow.pops[k].Description; strings.Contains(d, "every platform-app user") {
+			t.Errorf("%s default: description %q says widened", k, d)
+		}
+	}
+}
+
+func TestStaffSkipsResourceScopedRoles(t *testing.T) {
+	f := newFixture(t, fixtureOpts{})
+	owner := f.addUser("owner@example.com", "platform-owner")
+	cust := f.addUser("customer@example.com")
+	// The customer holds platform-admin on one resource only. Authsome's
+	// own role reads skip that, so it doesn't make them staff.
+	ws := f.eng.Warden().Store()
+	var roleID *wardenid.RoleID
+	for _, ns := range roleNamespaces {
+		if r, err := ws.GetRoleBySlug(f.ctx, f.app.String(), ns, "platform-admin"); err == nil {
+			roleID = &r.ID
+			break
+		}
+	}
+	if roleID == nil {
+		t.Fatal("no platform-admin role")
+	}
+	if err := ws.CreateAssignment(f.ctx, &wardenassign.Assignment{
+		ID:           wardenid.NewAssignmentID(),
+		TenantID:     f.app.String(),
+		RoleID:       *roleID,
+		SubjectKind:  "user",
+		SubjectID:    cust.String(),
+		ResourceType: "project",
+		ResourceID:   "p1",
+		CreatedAt:    time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	items := ids(population(t, New(f.eng), "authsome.staff-users"))
+	if items[cust.String()] != nil {
+		t.Error("a resource-scoped platform-admin counted as staff")
+	}
+	if items[owner.String()] == nil {
+		t.Error("owner missing")
+	}
+}
+
+func TestOrglessPrincipalsOwnedByCustomers(t *testing.T) {
+	f := newFixture(t, fixtureOpts{plugins: true})
+	owner := f.addUser("owner@example.com", "platform-owner")
+	cust := f.addUser("customer@example.com")
+	staffSvc := f.addServiceAccount(owner, id.OrgID{}, principal.KindWorkload)
+	platformSvc := f.addServiceAccount(id.UserID{}, id.OrgID{}, principal.KindWorkload)
+	custSvc := f.addServiceAccount(cust, id.OrgID{}, principal.KindWorkload)
+	staffAgent := f.addAgent(owner, id.OrgID{})
+	platformAgent := f.addAgent(id.UserID{}, id.OrgID{})
+	custAgent := f.addAgent(cust, id.OrgID{})
+
+	svcs := ids(population(t, New(f.eng), "authsome.service-accounts"))
+	if svcs[custSvc.String()] != nil {
+		t.Error("a customer-owned service account with no organisation was collected")
+	}
+	if svcs[staffSvc.String()] == nil || svcs[platformSvc.String()] == nil {
+		t.Errorf("service accounts = %v, want the staff and platform ones", keys(svcs))
+	}
+	agents := ids(population(t, New(f.eng), "authsome.agents"))
+	if agents[custAgent.String()] != nil {
+		t.Error("a customer-registered agent with no organisation was collected")
+	}
+	if agents[staffAgent.String()] == nil || agents[platformAgent.String()] == nil {
+		t.Errorf("agents = %v, want the staff and platform ones", keys(agents))
 	}
 }

@@ -37,7 +37,7 @@
 //     lockout, as Authsome enforces them.
 //   - authsome.staff-sessions: every live session a staff account holds.
 //   - authsome.service-accounts: non-human principals, agents included, that
-//     staff own or that belong to no organisation.
+//     staff own, or that belong to no organisation and have no owner.
 //   - authsome.agent-grants: delegations staff gave to agents, plus
 //     agentauth grants when that plugin is installed.
 //   - authsome.agents: agents registered with agentauth. Only when the
@@ -65,18 +65,24 @@
 // platform app. That is the safe rule for an app like Loomplane, where
 // customers sign up to the platform app too and every one of them holds
 // platform-user. The platform app is the scope's AppID, or the app Authsome
-// bootstrapped when that's empty.
+// bootstrapped when that's empty. A role held on one resource only (a
+// Warden assignment with a resource type) doesn't count, just as Authsome's
+// own role reads skip it.
 //
 // Turn on all_platform_users when your platform app is an operator console
 // and customers live in other apps. Then every user of the platform app is
 // staff. Scope.AllTenants does the same and also widens service accounts,
 // grants and agents to every organisation in the app. Either way, in a
 // single-app deployment your customers' accounts end up in Hallproof, and
-// the collector description says which rule was on.
+// every collector that reads staff says in its description which rule was
+// on. With all_platform_users on, the adapter also tells the witness it
+// collects beyond staff, so Hallproof shows that too. Scope.AllTenants is
+// the host's own setting, and the host reports it.
 //
-// Service accounts and agents are in scope when staff own them or when they
-// belong to no organisation. Grants are in scope when a staff user gave
-// them or an in-scope principal holds them.
+// Service accounts and agents are in scope when staff own them, or when
+// they belong to no organisation and nobody owns them. An org-less account
+// or agent a customer owns stays out. Grants are in scope when a staff user
+// gave them or an in-scope principal holds them.
 //
 // The adapter pages every list it can and fails the run, so the heartbeat
 // shows it unhealthy, when a list outgrows a population. It never sends a
