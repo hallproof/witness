@@ -703,3 +703,21 @@ func TestAttachExtensionWithoutVault(t *testing.T) {
 		t.Errorf("no log about the extension: %s", buf)
 	}
 }
+
+func TestAttachExtensionWithoutGetterSkipsTheContainer(t *testing.T) {
+	v := platformVault(t)
+	c, calls := countingContainer(t, v)
+	found, w, buf, err := attachExt(t, c, struct{}{}, map[string]any{"apps": []any{"platform"}})
+	if found || err != nil {
+		t.Fatalf("found=%v err=%v, want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the vault or its store %d times; want 0", *calls)
+	}
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "no Vault or Store getter") {
+		t.Fatalf("no warning about the missing getters; logs:\n%s", buf)
+	}
+	if taken(w, "vault.secrets") {
+		t.Error("vault.secrets was registered without the extension's vault")
+	}
+}

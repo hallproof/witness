@@ -71,8 +71,9 @@
 //
 // It asks Vault's own Forge extension ("vault") first, for its *vault.Vault
 // through the Vault method, or, when that is nil, its store through the
-// Store method. An extension with neither yet counts as no Vault, and the
-// adapter logs it. Only when your app doesn't run that extension does it
+// Store method. An extension with neither method, or neither value yet,
+// counts as no Vault: the adapter logs it and doesn't look in the container
+// either. Only when your app doesn't run that extension does it
 // look in the container, for a *vault.Vault first and then a store.Store.
 // The order matters: the extension registers both with constructors, and a
 // container that builds the vault on request starts it again.

@@ -600,27 +600,30 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 // when the app has neither. It reads them through Vault's extension when
 // the app runs it, and never asks the container then: the extension
 // registers both with constructors, and a container that builds the vault
-// starts it a second time. Only an app without the extension is looked up
-// in the container, where an app that builds its own vault or store
-// provides the finished value.
+// starts it a second time. An extension with neither getter, or neither
+// value yet, counts as no Vault and is logged. Only an app without the
+// extension is looked up in the container, where an app that builds its own
+// vault or store provides the finished value.
 func find(h adapter.Host) (*xvault.Vault, store.Store, error) {
 	if x, ok := h.Ext(extensionName); ok {
 		g, hasVault := x.(interface{ Vault() *xvault.Vault })
 		gs, hasStore := x.(interface{ Store() store.Store })
-		if hasVault || hasStore {
-			if hasVault {
-				if v := g.Vault(); v != nil {
-					return v, nil, nil
-				}
-			}
-			if hasStore {
-				if s := gs.Store(); s != nil {
-					return nil, s, nil
-				}
-			}
-			logger(h).Warn("witness/vault: the vault extension has no vault or store yet, so nothing is collected")
+		if !hasVault && !hasStore {
+			logger(h).Warn("witness/vault: the vault extension has no Vault or Store getter, so nothing is collected", "type", fmt.Sprintf("%T", x))
 			return nil, nil, nil
 		}
+		if hasVault {
+			if v := g.Vault(); v != nil {
+				return v, nil, nil
+			}
+		}
+		if hasStore {
+			if s := gs.Store(); s != nil {
+				return nil, s, nil
+			}
+		}
+		logger(h).Warn("witness/vault: the vault extension has no vault or store yet, so nothing is collected")
+		return nil, nil, nil
 	}
 	c, ok := h.Container.(vessel.Vessel)
 	if !ok || c == nil {
