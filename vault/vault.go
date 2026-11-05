@@ -567,15 +567,15 @@ func (a *Adapter) config(ctx context.Context) ([]map[string]any, error) {
 	return items, nil
 }
 
-// attach finds Vault in a Forge app's container: the engine first, then a
-// bare store.
+// attach finds Vault in a Forge app: through Vault's own extension when
+// the app runs it, else in the container, the engine first and then a bare
+// store.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil {
-		return false, nil
+	v, s, err := find(h)
+	if err != nil {
+		return true, err
 	}
-	hasEngine, hasStore := vessel.HasType[*xvault.Vault](c), vessel.HasType[store.Store](c)
-	if !hasEngine && !hasStore {
+	if v == nil && s == nil {
 		return false, nil
 	}
 	var o Options
@@ -585,21 +585,67 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 	opts := []Option{WithOptions(o), WithLogger(h.Logger)}
 
 	var a *Adapter
-	if hasEngine {
-		v, err := vessel.Inject[*xvault.Vault](c)
-		if err != nil {
-			return true, fmt.Errorf("witness/vault: resolving the vault: %w", err)
-		}
+	if v != nil {
 		a = NewFromVault(v, opts...)
 	} else {
-		s, err := vessel.Inject[store.Store](c)
-		if err != nil {
-			return true, fmt.Errorf("witness/vault: resolving the vault store: %w", err)
-		}
 		a = New(s, opts...)
 	}
 	if h.Scope.AllTenants && len(o.Tenants) == 0 {
 		a.log.Warn("witness/vault: the scope covers all tenants, but Vault can't list its tenants; name them in tenants to collect their secrets")
 	}
 	return true, a.Register(h.Witness)
+}
+
+// find returns the app's vault, or failing that its store; both are nil
+// when the app has neither. It reads them through Vault's extension when
+// the app runs it, and never asks the container then: the extension
+// registers both with constructors, and a container that builds the vault
+// starts it a second time. Only an app without the extension is looked up
+// in the container, where an app that builds its own vault or store
+// provides the finished value.
+func find(h adapter.Host) (*xvault.Vault, store.Store, error) {
+	if x, ok := h.Ext(extensionName); ok {
+		g, hasVault := x.(interface{ Vault() *xvault.Vault })
+		gs, hasStore := x.(interface{ Store() store.Store })
+		if hasVault || hasStore {
+			if hasVault {
+				if v := g.Vault(); v != nil {
+					return v, nil, nil
+				}
+			}
+			if hasStore {
+				if s := gs.Store(); s != nil {
+					return nil, s, nil
+				}
+			}
+			logger(h).Warn("witness/vault: the vault extension has no vault or store yet, so nothing is collected")
+			return nil, nil, nil
+		}
+	}
+	c, ok := h.Container.(vessel.Vessel)
+	if !ok || c == nil {
+		return nil, nil, nil
+	}
+	if vessel.HasType[*xvault.Vault](c) {
+		v, err := vessel.Inject[*xvault.Vault](c)
+		if err != nil {
+			return nil, nil, fmt.Errorf("witness/vault: resolving the vault: %w", err)
+		}
+		return v, nil, nil
+	}
+	if vessel.HasType[store.Store](c) {
+		s, err := vessel.Inject[store.Store](c)
+		if err != nil {
+			return nil, nil, fmt.Errorf("witness/vault: resolving the vault store: %w", err)
+		}
+		return nil, s, nil
+	}
+	return nil, nil, nil
+}
+
+func logger(h adapter.Host) *slog.Logger {
+	if h.Logger != nil {
+		return h.Logger
+	}
+	return slog.Default()
 }

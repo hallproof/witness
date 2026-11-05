@@ -65,15 +65,22 @@
 // # Using it
 //
 // In a Forge app, import the package for its side effect and witness/forge
-// finds Vault in the container. It looks for a *vault.Vault first (Vault's
-// own Forge extension provides one), then a store.Store:
+// finds Vault:
 //
 //	import _ "github.com/hallproof/witness/vault"
 //
-// If you build Vault's services yourself, provide the store so the adapter
-// can find it:
+// It asks Vault's own Forge extension ("vault") first, for its *vault.Vault
+// through the Vault method, or, when that is nil, its store through the
+// Store method. An extension with neither yet counts as no Vault, and the
+// adapter logs it. Only when your app doesn't run that extension does it
+// look in the container, for a *vault.Vault first and then a store.Store.
+// The order matters: the extension registers both with constructors, and a
+// container that builds the vault on request starts it again.
 //
-//	vessel.Provide(app.Container(), func() (store.Store, error) { return vaultpg.New(db), nil })
+// If you build Vault's services yourself, provide the finished store (or
+// vault) as a value, not a constructor, so the adapter can find it:
+//
+//	vessel.ProvideValue[store.Store](app.Container(), vaultpg.New(db))
 //
 // Without Forge, build the adapter and register it before the witness
 // starts:

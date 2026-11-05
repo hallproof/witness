@@ -18,7 +18,9 @@ import (
 	"github.com/xraph/vault/store"
 	"github.com/xraph/vault/store/memory"
 
+	"github.com/hallproof/witness"
 	"github.com/hallproof/witness/adapter"
+	"github.com/hallproof/witness/collect"
 	"github.com/hallproof/witness/push"
 )
 
@@ -73,7 +75,7 @@ func TestAttachSkipsMissingEngine(t *testing.T) {
 
 func TestAttachFindsStore(t *testing.T) {
 	c := vessel.New()
-	if err := vessel.Provide(c, func() (store.Store, error) { return memory.New(), nil }); err != nil {
+	if err := vessel.ProvideValue[store.Store](c, memory.New()); err != nil {
 		t.Fatal(err)
 	}
 	found, buf, err := attachVault(t, c, map[string]any{"apps": []any{"platform"}}, adapter.Scope{})
@@ -91,7 +93,7 @@ func TestAttachFindsVault(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := vessel.New()
-	if err = vessel.Provide(c, func() (*xvault.Vault, error) { return v, nil }); err != nil {
+	if err = vessel.ProvideValue(c, v); err != nil {
 		t.Fatal(err)
 	}
 	found, _, err := attachVault(t, c, nil, adapter.Scope{})
@@ -575,5 +577,129 @@ func TestNeverSendsContent(t *testing.T) {
 	}
 	if c := s.calls(); len(c) != 0 {
 		t.Fatalf("the adapter called %v", c)
+	}
+}
+
+// vaultExt stands in for Vault's Forge extension: only its getters.
+type vaultExt struct {
+	v *xvault.Vault
+	s store.Store
+}
+
+func (x vaultExt) Vault() *xvault.Vault { return x.v }
+func (x vaultExt) Store() store.Store   { return x.s }
+
+// attachExt attaches the adapter in an app that runs ext under Vault's
+// extension name, with c as its container.
+func attachExt(t *testing.T, c any, ext any, cfg map[string]any) (bool, *witness.Witness, *logBuffer, error) {
+	t.Helper()
+	var a adapter.Adapter
+	for _, x := range adapter.Adapters() {
+		if x.Name == "vault" {
+			a = x
+		}
+	}
+	w := newWitness(t)
+	log, buf := bufferLogger()
+	found, err := a.Attach(bg, adapter.Host{
+		Witness:   w,
+		Logger:    log,
+		Container: c,
+		Config:    cfg,
+		Extension: func(name string) (any, bool) {
+			if name == "vault" {
+				return ext, true
+			}
+			return nil, false
+		},
+	})
+	return found, w, buf, err
+}
+
+// countingContainer registers the vault and its store with constructors,
+// as Vault's extension does, and counts how often the container builds
+// either.
+func countingContainer(t *testing.T, v *xvault.Vault) (vessel.Vessel, *int) {
+	t.Helper()
+	calls := new(int)
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*xvault.Vault, error) {
+		*calls++
+		return v, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := vessel.Provide(c, func() (store.Store, error) {
+		*calls++
+		return v.Store(), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, calls
+}
+
+func platformVault(t *testing.T) *xvault.Vault {
+	t.Helper()
+	v, err := xvault.New(xvault.WithStore(memory.New()), xvault.WithAppID("platform"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// taken reports whether a population key is already registered on w.
+func taken(w *witness.Witness, key string) bool {
+	err := w.Population(collect.Population{Key: key, Title: "probe", Collect: func(context.Context) ([]map[string]any, error) { return nil, nil }})
+	return err != nil && strings.Contains(err.Error(), "already used")
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	v := platformVault(t)
+	c, calls := countingContainer(t, v)
+	found, w, _, err := attachExt(t, c, vaultExt{v: v, s: v.Store()}, nil)
+	if !found || err != nil {
+		t.Fatalf("found=%v err=%v, want true, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the vault or its store %d times; want 0", *calls)
+	}
+	for _, k := range []string{"vault.secrets", "vault.flags"} {
+		if !taken(w, k) {
+			t.Errorf("%s was not registered", k)
+		}
+	}
+}
+
+// An extension with a store but no vault yet still gives the store.
+func TestAttachUsesTheExtensionStore(t *testing.T) {
+	v := platformVault(t)
+	c, calls := countingContainer(t, v)
+	found, w, _, err := attachExt(t, c, vaultExt{s: v.Store()}, map[string]any{"apps": []any{"platform"}})
+	if !found || err != nil {
+		t.Fatalf("found=%v err=%v, want true, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the vault or its store %d times; want 0", *calls)
+	}
+	if !taken(w, "vault.secrets") {
+		t.Error("vault.secrets was not registered")
+	}
+}
+
+func TestAttachExtensionWithoutVault(t *testing.T) {
+	v := platformVault(t)
+	c, calls := countingContainer(t, v)
+	found, w, buf, err := attachExt(t, c, vaultExt{}, nil)
+	if found || err != nil {
+		t.Fatalf("found=%v err=%v, want false, nil", found, err)
+	}
+	if *calls != 0 {
+		t.Fatalf("the container built the vault or its store %d times; want 0", *calls)
+	}
+	if taken(w, "vault.secrets") {
+		t.Error("vault.secrets was registered with no vault")
+	}
+	if !strings.Contains(buf.String(), "extension") {
+		t.Errorf("no log about the extension: %s", buf)
 	}
 }
