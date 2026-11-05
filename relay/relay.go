@@ -163,6 +163,8 @@ func newAdapter(eps endpoint.Store, cat catalog.Store, o Options) *Adapter {
 // Register adds the adapter's collectors to w. With no staff tenants and
 // AllTenants off it skips the endpoint population and logs why. It returns
 // ErrNoTenants, and adds nothing, when that leaves nothing to collect.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	pops, snaps, err := a.collectors()
 	if err != nil {
@@ -171,17 +173,10 @@ func (a *Adapter) Register(w *witness.Witness) error {
 	if !a.endpointsInScope() {
 		a.log.Warn("witness/relay: no staff_tenants are set, so webhook endpoints are not collected")
 	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, s := range snaps {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Population(pops...)
+	set.Snapshot(snaps...)
+	return set.Register(w)
 }
 
 func (a *Adapter) endpointsInScope() bool { return a.o.AllTenants || len(a.tenants) > 0 }
