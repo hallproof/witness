@@ -230,3 +230,35 @@ func TestMiddlewareUsesWitnessChain(t *testing.T) {
 		t.Fatalf("%d events reached witness's chain, want 1", c.n)
 	}
 }
+
+// Review, re-graded Minor #2: frameworks such as fx pass Start a context
+// that ends once start-up is over. The collectors must keep running.
+func TestStartContextEndingDoesNotStopCollectors(t *testing.T) {
+	s := ingesttest.New(t)
+	w, err := witness.New(witness.Options{Endpoint: s.URL, IngestKey: s.Key, Logger: quiet,
+		ClientOptions: []client.Option{client.WithBackoff(time.Millisecond, 10*time.Millisecond)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	v := 0
+	if err = w.Snapshot(collect.Snapshot{Key: "a", Title: "t", Every: 20 * time.Millisecond, Collect: func(context.Context) (map[string]any, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		v++
+		return map[string]any{"v": v}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	startCtx, cancel := context.WithCancel(t.Context())
+	if err = w.Start(startCtx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	time.Sleep(50 * time.Millisecond)
+	before := len(s.Stored())
+	eventually(t, "evidence after Start's context ended", func() bool { return len(s.Stored()) > before+1 })
+	if err := stopWithin(t, w, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}

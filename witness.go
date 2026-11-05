@@ -161,7 +161,10 @@ func (w *Witness) Middleware(o httpmw.Options) func(http.Handler) http.Handler {
 func (w *Witness) Client() *client.Client { return w.client }
 
 // Start starts the collectors and the sender, and returns at once. They
-// run until Stop, or until ctx ends. Start can be called once.
+// run until Stop. Start can be called once.
+//
+// ctx's values carry over, but its end doesn't stop witness: frameworks
+// such as fx hand Start a context that ends once start-up is over.
 func (w *Witness) Start(ctx context.Context) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -173,7 +176,7 @@ func (w *Witness) Start(ctx context.Context) error {
 		w.log.Info("witness: no chain is configured, so event recording is off")
 	}
 
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	w.cancel, w.done = cancel, make(chan struct{})
 	w.client.Start()
 	go func() {
