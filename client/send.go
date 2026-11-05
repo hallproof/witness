@@ -27,20 +27,27 @@ const envelope = len(`{"version":1,"messages":[]}`)
 // limit. A 400 answers every message in that batch "rejected" with
 // Hallproof's reason and isn't retried.
 //
+// A message of a kind Hallproof recently answered "unsupported" isn't sent:
+// it gets an "unsupported" result straight away (see WithHoldBack).
+//
 // The error is ErrUnauthorized, ErrUnavailable or the context's. When it is
 // set, the messages Send didn't get an answer for have an empty Status.
 func (c *Client) Send(ctx context.Context, msgs ...push.Message) ([]push.Result, error) {
 	results := make([]push.Result, len(msgs))
+	c.holdBackKinds(msgs, results)
+	var err error
 	for _, b := range c.plan(msgs, results) {
-		if err := c.sendBatch(ctx, msgs, b, results, c.maxAttempts); err != nil {
-			return results, err
+		if err = c.sendBatch(ctx, msgs, b, results, c.maxAttempts); err != nil {
+			break
 		}
 	}
-	return results, nil
+	c.account(msgs, results)
+	return results, err
 }
 
 // plan answers oversize messages in results and groups the rest, by index,
-// into batches within MaxMessages and MaxBatchBytes.
+// into batches within MaxMessages and MaxBatchBytes. Messages that already
+// have a result are skipped.
 func (c *Client) plan(msgs []push.Message, results []push.Result) [][]int {
 	var (
 		batches [][]int
@@ -48,6 +55,9 @@ func (c *Client) plan(msgs []push.Message, results []push.Result) [][]int {
 		size    = envelope
 	)
 	for i, m := range msgs {
+		if results[i].Status != "" {
+			continue
+		}
 		n, err := encodedSize(m)
 		switch {
 		case err != nil:

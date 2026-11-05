@@ -76,6 +76,8 @@ type Client struct {
 	maxBackoff time.Duration
 
 	maxAttempts int
+
+	q queue
 }
 
 // New returns a Client for the Hallproof at endpoint, such as
@@ -102,6 +104,7 @@ func New(endpoint, ingestKey string, opts ...Option) (*Client, error) {
 		maxBackoff:  DefaultMaxBackoff,
 		maxAttempts: DefaultMaxAttempts,
 	}
+	c.q.init()
 	for _, o := range opts {
 		o(c)
 	}
@@ -110,6 +113,9 @@ func New(endpoint, ingestKey string, opts ...Option) (*Client, error) {
 	}
 	if c.maxAttempts < 1 {
 		return nil, errors.New("witness: max attempts must be at least 1")
+	}
+	if c.q.size < 1 || c.q.holdBack < 0 {
+		return nil, errors.New("witness: the queue size must be at least 1 and the hold-back not negative")
 	}
 	return c, nil
 }
