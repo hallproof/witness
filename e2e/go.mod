@@ -18,16 +18,16 @@ replace (
 
 require (
 	github.com/hallproof/witness v0.2.0
-	github.com/hallproof/witness/authsome v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/bastion v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/chronicle v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/forge v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/grove v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/keysmith v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/relay v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/trove v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/vault v0.0.0-00010101000000-000000000000
-	github.com/hallproof/witness/warden v0.0.0-00010101000000-000000000000
+	github.com/hallproof/witness/authsome v0.2.0
+	github.com/hallproof/witness/bastion v0.2.0
+	github.com/hallproof/witness/chronicle v0.2.0
+	github.com/hallproof/witness/forge v0.2.0
+	github.com/hallproof/witness/grove v0.2.0
+	github.com/hallproof/witness/keysmith v0.2.0
+	github.com/hallproof/witness/relay v0.2.0
+	github.com/hallproof/witness/trove v0.2.0
+	github.com/hallproof/witness/vault v0.2.0
+	github.com/hallproof/witness/warden v0.2.0
 	github.com/xraph/chronicle v1.11.0
 	github.com/xraph/forge v1.13.2
 	github.com/xraph/keysmith v1.8.1
