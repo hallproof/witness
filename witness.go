@@ -14,6 +14,7 @@ import (
 	"github.com/hallproof/witness/chain"
 	"github.com/hallproof/witness/client"
 	"github.com/hallproof/witness/collect"
+	"github.com/hallproof/witness/httpmw"
 )
 
 // Version is this SDK's version. It goes in the User-Agent header and in
@@ -142,6 +143,18 @@ func (w *Witness) EventProof(e collect.EventProof) error {
 
 // Chain returns the chain witness records to.
 func (w *Witness) Chain() chain.Chain { return w.chain }
+
+// Middleware returns httpmw's middleware, recording to witness's chain and
+// logging to its logger unless o says otherwise.
+func (w *Witness) Middleware(o httpmw.Options) func(http.Handler) http.Handler {
+	if o.Chain == nil {
+		o.Chain = w.chain
+	}
+	if o.Logger == nil {
+		o.Logger = w.log
+	}
+	return httpmw.New(o)
+}
 
 // Client returns the client witness pushes with, for apps that also push
 // by hand.

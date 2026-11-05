@@ -6,14 +6,17 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/hallproof/witness"
+	"github.com/hallproof/witness/chain"
 	"github.com/hallproof/witness/client"
 	"github.com/hallproof/witness/collect"
+	"github.com/hallproof/witness/httpmw"
 	"github.com/hallproof/witness/ingesttest"
 	"github.com/hallproof/witness/push"
 )
@@ -194,5 +197,36 @@ func TestLifecycleErrors(t *testing.T) {
 	}
 	if err := stopWithin(t, w, time.Second); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type countingChain struct {
+	chain.Unconfigured
+	mu sync.Mutex
+	n  int
+}
+
+func (c *countingChain) Record(context.Context, chain.Event) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.n++
+	return nil
+}
+
+func TestMiddlewareUsesWitnessChain(t *testing.T) {
+	s := ingesttest.New(t)
+	c := &countingChain{}
+	w, err := witness.New(witness.Options{Endpoint: s.URL, IngestKey: s.Key, Logger: quiet, Chain: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := w.Middleware(httpmw.Options{Actor: func(*http.Request) (httpmw.Actor, bool) {
+		return httpmw.Actor{ID: "usr_1", Staff: true}, true
+	}})(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/x", nil))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.n != 1 {
+		t.Fatalf("%d events reached witness's chain, want 1", c.n)
 	}
 }
