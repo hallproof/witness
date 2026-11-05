@@ -136,7 +136,7 @@ Witness collects staff, not customers, by default: the people who run your platf
 
 Adapters send metadata, never content. No secret values, prompts, payloads, bodies or error text leave your app in a snapshot or population, and every adapter has a test that fails if one does. Event proofs are different. A proof carries every event in a signed segment of your Chronicle chain as it was recorded, with its reason, metadata, IP and user agent, because Hallproof needs the whole segment to check the hashes. That's why they're off by default, and why you should turn them on only for a stream that holds staff events and nothing else. Chronicle's [What it sends](https://pkg.go.dev/github.com/hallproof/witness/chronicle#hdr-What_it_sends) section lists every field.
 
-Outside Forge, each adapter has a plain constructor that takes the library's engine, such as `keysmith.New(engine, keysmith.WithStaffTenants("acme"))`, and a `Register(w)` that adds its collectors to your witness.
+Outside Forge, each adapter has a plain constructor that takes the library's engine, such as `keysmith.New(engine, keysmith.WithStaffTenants("acme"))`, and a `Register(w)` that adds its collectors to your witness. It adds all of them or none: if one fails, the ones it added before are taken out again.
 
 ## The packages
 
