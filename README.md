@@ -117,7 +117,7 @@ Each adapter is a module of its own, so you only download the libraries you use:
 
 | Module | What it collects |
 |--------|------------------|
-| [`chronicle`](chronicle) | Proves signed segments of your Chronicle audit chain, and reports how far the platform stream is past its last checkpoint |
+| [`chronicle`](chronicle) | Proves signed segments of your Chronicle audit chain, and reports whether the platform stream's checkpoints keep up |
 | [`authsome`](authsome) | Staff users and their roles, auth policy, sessions, service accounts, agents and their grants |
 | [`warden`](warden) | Roles, role assignments, policies and a fingerprint of the access model |
 | [`keysmith`](keysmith) | API keys, key policies and rotation |
@@ -132,9 +132,9 @@ Each adapter is a module of its own, so you only download the libraries you use:
 | [`shield`](shield) | AI safety profiles, checks and policies |
 | [`sentinel`](sentinel) | AI eval suites, latest scores and red-team runs |
 
-Witness collects staff, not customers, by default: the people who run your platform, its service accounts and its keys. Some libraries can't tell those apart on their own, so their adapters need you to name the platform's tenants or apps, and each package's docs say which. A company whose audit covers customer access too can set `scope.all_tenants`, and Hallproof shows that the scope was widened.
+Witness collects staff, not customers, by default: the people who run your platform, its service accounts and its keys. Some libraries can't tell those apart on their own, so their adapters need you to name the platform's tenants or apps, and each package's docs say which. A company whose audit covers customer access too can set `scope.all_tenants`, and Hallproof shows that the scope was widened. An adapter whose own options reach further, such as extra Chronicle streams, is marked widened in the coverage snapshot too.
 
-Adapters send metadata, never content. No secret values, prompts, payloads, bodies or error text leave your app, and every adapter has a test that fails if one does.
+Adapters send metadata, never content. No secret values, prompts, payloads, bodies or error text leave your app in a snapshot or population, and every adapter has a test that fails if one does. Event proofs are different. A proof carries every event in a signed segment of your Chronicle chain as it was recorded, with its reason, metadata, IP and user agent, because Hallproof needs the whole segment to check the hashes. That's why they're off by default, and why you should turn them on only for a stream that holds staff events and nothing else. Chronicle's [What it sends](https://pkg.go.dev/github.com/hallproof/witness/chronicle#hdr-What_it_sends) section lists every field.
 
 Outside Forge, each adapter has a plain constructor that takes the library's engine, such as `keysmith.New(engine, keysmith.WithStaffTenants("acme"))`, and a `Register(w)` that adds its collectors to your witness.
 
