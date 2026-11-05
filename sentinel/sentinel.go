@@ -123,27 +123,18 @@ func newAdapter(eng *engine.Engine, o Options) *Adapter {
 }
 
 // Register adds the adapter's collectors to w.
+// It adds them all or none: when one fails, the ones added before it
+// are taken out again.
 func (a *Adapter) Register(w *witness.Witness) error {
 	pops, snaps, proofs, err := a.collectors()
 	if err != nil {
 		return err
 	}
-	for _, p := range pops {
-		if err := w.Population(p); err != nil {
-			return err
-		}
-	}
-	for _, s := range snaps {
-		if err := w.Snapshot(s); err != nil {
-			return err
-		}
-	}
-	for _, e := range proofs {
-		if err := w.EventProof(e); err != nil {
-			return err
-		}
-	}
-	return nil
+	var set adapter.Set
+	set.Population(pops...)
+	set.Snapshot(snaps...)
+	set.EventProof(proofs...)
+	return set.Register(w)
 }
 
 // collectors builds every collector. None has Tests yet: Hallproof has no
