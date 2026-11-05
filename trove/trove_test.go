@@ -333,6 +333,58 @@ func TestStaffScope(t *testing.T) {
 	}
 }
 
+// all_tenants in the adapter's own config takes trove.buckets past staff,
+// so attach tells the host. The witness scope's AllTenants is the host's
+// own setting, which it already knows about.
+func TestAttachReportsWidening(t *testing.T) {
+	for name, tc := range map[string]struct {
+		h    adapter.Host
+		want []string
+	}{
+		"default":            {want: nil},
+		"all tenants":        {h: adapter.Host{Config: map[string]any{"all_tenants": true}}, want: []string{"all_tenants"}},
+		"global all tenants": {h: adapter.Host{Scope: adapter.Scope{AllTenants: true}}, want: nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := vessel.New()
+			if err := vessel.ProvideValue(c, open(t, memdriver.New())); err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			h := tc.h
+			h.Witness, h.Container = newWitness(t), c
+			h.Widen = func(reason string) { got = append(got, reason) }
+			found, err := attach(context.Background(), h)
+			if !found || err != nil {
+				t.Fatalf("attach = %v, %v", found, err)
+			}
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("widened = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWidenedDescription(t *testing.T) {
+	desc := func(a *Adapter) string {
+		for _, p := range a.populations() {
+			if p.Key == KeyBuckets {
+				return p.Description
+			}
+		}
+		t.Fatal("trove.buckets is not registered")
+		return ""
+	}
+	staff := desc(New(open(t, memdriver.New()), WithMetadataStore(newMeta())))
+	wide := desc(New(open(t, memdriver.New()), WithMetadataStore(newMeta()), WithAllTenants()))
+	if strings.Contains(staff, "customers'") {
+		t.Errorf("staff description = %q", staff)
+	}
+	if !strings.Contains(wide, "customers'") {
+		t.Errorf("widened description = %q", wide)
+	}
+}
+
 func TestTooManyFailsTheRun(t *testing.T) {
 	old := maxItems
 	maxItems = 1

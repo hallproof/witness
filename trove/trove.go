@@ -179,10 +179,14 @@ func (a *Adapter) populations() []collect.Population {
 		Collect:     a.collectStores,
 	}}
 	if a.hasMeta {
+		desc := "Buckets recorded in Trove's metadata store with their versioning, lifecycle rules and quotas. Trove records only buckets made through its own API or dashboard, so this list can be empty."
+		if a.o.AllTenants {
+			desc += " Widened to every tenant: your customers' bucket records are included and marked tenanted."
+		}
 		pops = append(pops, collect.Population{
 			Key:         KeyBuckets,
 			Title:       "Trove bucket records",
-			Description: "Buckets recorded in Trove's metadata store with their versioning, lifecycle rules and quotas. Trove records only buckets made through its own API or dashboard, so this list can be empty.",
+			Description: desc,
 			Source:      "object-buckets",
 			Every:       time.Hour,
 			Collect:     a.collectBuckets,
@@ -200,11 +204,16 @@ func init() {
 	})
 }
 
-// options decodes the host's config section and applies its scope.
+// options decodes the host's config section and applies its scope. When
+// the adapter's own all_tenants is set it tells the host, which already
+// knows about the witness scope's AllTenants.
 func options(h adapter.Host) (Options, error) {
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return o, err
+	}
+	if o.AllTenants {
+		h.Widened("all_tenants")
 	}
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
 	return o, nil

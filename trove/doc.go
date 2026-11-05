@@ -41,6 +41,9 @@
 // buckets the platform made for itself. Set all_tenants (or the witness
 // scope's AllTenants) to add your customers' bucket records. They are still
 // settings only, marked tenanted, and the tenant key itself isn't sent.
+// trove.buckets then says in its description that it's widened, and when
+// all_tenants comes from the adapter's own config, the adapter tells the
+// witness host, so Hallproof can show the scope was widened.
 //
 // # Options
 //
