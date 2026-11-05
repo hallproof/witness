@@ -19,8 +19,13 @@ import (
 	// rest have to report their library as not found.
 	_ "github.com/hallproof/witness/authsome"
 	_ "github.com/hallproof/witness/bastion"
+	_ "github.com/hallproof/witness/cortex"
+	_ "github.com/hallproof/witness/dispatch"
 	_ "github.com/hallproof/witness/grove"
+	_ "github.com/hallproof/witness/nexus"
 	_ "github.com/hallproof/witness/relay"
+	_ "github.com/hallproof/witness/sentinel"
+	_ "github.com/hallproof/witness/shield"
 	_ "github.com/hallproof/witness/trove"
 	_ "github.com/hallproof/witness/vault"
 	_ "github.com/hallproof/witness/warden"
@@ -33,7 +38,7 @@ const vaultSecrets = "vault.secrets"
 var running = []string{"chronicle", "keysmith", "vault"}
 
 // every names every adapter module in this repo.
-var every = []string{"authsome", "bastion", "chronicle", "grove", "keysmith", "relay", "trove", "vault", "warden"}
+var every = []string{"authsome", "bastion", "chronicle", "cortex", "dispatch", "grove", "keysmith", "nexus", "relay", "sentinel", "shield", "trove", "vault", "warden"}
 
 // heartbeatEvery is short, so that a witness still running after Stop would
 // show up as new requests within a second.

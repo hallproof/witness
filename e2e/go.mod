@@ -7,10 +7,15 @@ replace (
 	github.com/hallproof/witness/authsome => ../authsome
 	github.com/hallproof/witness/bastion => ../bastion
 	github.com/hallproof/witness/chronicle => ../chronicle
+	github.com/hallproof/witness/cortex => ../cortex
+	github.com/hallproof/witness/dispatch => ../dispatch
 	github.com/hallproof/witness/forge => ../forge
 	github.com/hallproof/witness/grove => ../grove
 	github.com/hallproof/witness/keysmith => ../keysmith
+	github.com/hallproof/witness/nexus => ../nexus
 	github.com/hallproof/witness/relay => ../relay
+	github.com/hallproof/witness/sentinel => ../sentinel
+	github.com/hallproof/witness/shield => ../shield
 	github.com/hallproof/witness/trove => ../trove
 	github.com/hallproof/witness/vault => ../vault
 	github.com/hallproof/witness/warden => ../warden
@@ -21,10 +26,15 @@ require (
 	github.com/hallproof/witness/authsome v0.2.0
 	github.com/hallproof/witness/bastion v0.2.0
 	github.com/hallproof/witness/chronicle v0.2.0
+	github.com/hallproof/witness/cortex v0.2.0
+	github.com/hallproof/witness/dispatch v0.2.0
 	github.com/hallproof/witness/forge v0.2.0
 	github.com/hallproof/witness/grove v0.2.0
 	github.com/hallproof/witness/keysmith v0.2.0
+	github.com/hallproof/witness/nexus v0.2.0
 	github.com/hallproof/witness/relay v0.2.0
+	github.com/hallproof/witness/sentinel v0.2.0
+	github.com/hallproof/witness/shield v0.2.0
 	github.com/hallproof/witness/trove v0.2.0
 	github.com/hallproof/witness/vault v0.2.0
 	github.com/hallproof/witness/warden v0.2.0
@@ -32,6 +42,14 @@ require (
 	github.com/xraph/forge v1.13.2
 	github.com/xraph/keysmith v1.8.1
 	github.com/xraph/vault v1.8.1
+)
+
+require (
+	github.com/shopspring/decimal v1.4.0 // indirect
+	github.com/xraph/cortex v1.10.4 // indirect
+	github.com/xraph/nexus v1.9.2 // indirect
+	github.com/xraph/sentinel v1.10.0 // indirect
+	github.com/xraph/shield v1.10.0 // indirect
 )
 
 require (
@@ -96,7 +114,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.19.2 // indirect
+	github.com/klauspost/compress v1.20.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.4.0 // indirect
 	github.com/leodido/go-urn v1.5.0 // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
@@ -127,14 +145,14 @@ require (
 	github.com/xraph/authsome v1.9.1 // indirect
 	github.com/xraph/bastion v1.4.1 // indirect
 	github.com/xraph/confy v1.1.0 // indirect
-	github.com/xraph/dispatch v1.9.1 // indirect
+	github.com/xraph/dispatch v1.9.3 // indirect
 	github.com/xraph/farp v1.3.1 // indirect
 	github.com/xraph/farp/discovery v1.3.1 // indirect
 	github.com/xraph/forge/extensions/auth v1.12.9 // indirect
 	github.com/xraph/go-utils v1.5.0 // indirect
 	github.com/xraph/grove v1.10.2 // indirect
-	github.com/xraph/grove/drivers/mongodriver v1.10.1 // indirect
-	github.com/xraph/grove/drivers/pgdriver v1.10.1 // indirect
+	github.com/xraph/grove/drivers/mongodriver v1.10.2 // indirect
+	github.com/xraph/grove/drivers/pgdriver v1.10.2 // indirect
 	github.com/xraph/grove/drivers/sqlitedriver v1.10.2 // indirect
 	github.com/xraph/ledger v1.9.1 // indirect
 	github.com/xraph/relay v1.8.1 // indirect
@@ -163,14 +181,14 @@ require (
 	go.uber.org/atomic v1.11.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.4 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/exp v0.0.0-20260813180055-c1d0aacb2297 // indirect
-	golang.org/x/net v0.60.0 // indirect
+	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
-	golang.org/x/sync v0.23.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
-	golang.org/x/term v0.46.0 // indirect
-	golang.org/x/text v0.42.0 // indirect
+	golang.org/x/sync v0.24.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/term v0.47.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260819154853-08b0e4226688 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
@@ -185,10 +203,10 @@ require (
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260721132016-d427ff9ee9ad // indirect
 	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3 // indirect
-	modernc.org/libc v1.75.3 // indirect
+	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
-	modernc.org/memory v1.12.0 // indirect
-	modernc.org/sqlite v1.56.0 // indirect
+	modernc.org/memory v1.12.1 // indirect
+	modernc.org/sqlite v1.58.0 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.2 // indirect
