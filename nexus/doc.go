@@ -109,11 +109,19 @@
 //
 // # Using it
 //
-// With Forge, import the package for its side effect. Nexus's own Forge
-// extension puts *nexus.Gateway in the container, and the witness extension
-// finds it there:
+// With Forge, import the package for its side effect:
 //
 //	import _ "github.com/hallproof/witness/nexus"
+//
+// The adapter reads the gateway through nexus's own Forge extension
+// ("nexus", its Gateway method), which already built and started it. If
+// that extension is running but has no gateway yet, nexus counts as not
+// found and the adapter logs why. Only when your app doesn't run nexus's
+// extension does the adapter look for *nexus.Gateway in the container. If
+// you build the gateway yourself, provide the finished value with
+// forge.ProvideValue(c, gw), not a constructor: a container starts a value
+// it builds from a constructor, and a gateway started twice runs
+// everything twice.
 //
 // Without Forge, build the adapter and register it before you start
 // witness:

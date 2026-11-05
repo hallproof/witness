@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -262,6 +263,92 @@ func provide(t *testing.T, gw *nx.Gateway) vessel.Vessel {
 		t.Fatal(err)
 	}
 	return c
+}
+
+// fakeExt stands in for nexus's Forge extension. The adapter only uses
+// its getter.
+type fakeExt struct{ gw *nx.Gateway }
+
+func (x fakeExt) Gateway() *nx.Gateway { return x.gw }
+
+// extensions is a host's extension lookup that runs only x, as "nexus".
+func extensions(x any) func(string) (any, bool) {
+	return func(name string) (any, bool) {
+		if name == "nexus" {
+			return x, true
+		}
+		return nil, false
+	}
+}
+
+// constructed registers gw with a constructor, the way nexus's extension
+// does, and counts how often the container builds it.
+func constructed(t *testing.T, gw *nx.Gateway) (vessel.Vessel, *atomic.Int32) {
+	t.Helper()
+	var built atomic.Int32
+	c := vessel.New()
+	if err := vessel.Provide(c, func() (*nx.Gateway, error) {
+		built.Add(1)
+		return gw, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return c, &built
+}
+
+func TestAttachUsesTheExtensionNotTheContainer(t *testing.T) {
+	f := newFixture(t)
+	c, built := constructed(t, f.gw)
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{
+		Witness: w, Container: c, Extension: extensions(fakeExt{f.gw}),
+		Config: map[string]any{"tenants": []any{"staff"}},
+	})
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	for _, k := range []string{KeyGateway, KeyModelsInUse, KeyKeys, KeyBudgets} {
+		if !taken(t, w, k) {
+			t.Errorf("%s was not registered", k)
+		}
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the gateway %d times, want 0", n)
+	}
+}
+
+func TestAttachReadsAProvidedGateway(t *testing.T) {
+	f := newFixture(t)
+	c := vessel.New()
+	if err := vessel.ProvideValue(c, f.gw); err != nil {
+		t.Fatal(err)
+	}
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{Witness: w, Container: c})
+	if !found || err != nil {
+		t.Fatalf("attach = %v, %v; want true, nil", found, err)
+	}
+	if !taken(t, w, KeyGateway) {
+		t.Fatalf("%s was not registered", KeyGateway)
+	}
+}
+
+// An extension whose getter returns nil hasn't built its gateway, so nexus
+// counts as absent and the container is never asked instead.
+func TestAttachWithAnEmptyExtensionIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	c, built := constructed(t, f.gw)
+	w := newWitness(t)
+	found, err := attach(context.Background(), adapter.Host{Witness: w, Container: c, Extension: extensions(fakeExt{})})
+	if found || err != nil {
+		t.Fatalf("attach = %v, %v; want false, nil", found, err)
+	}
+	if taken(t, w, KeyGateway) {
+		t.Fatalf("%s was registered with no gateway", KeyGateway)
+	}
+	if n := built.Load(); n != 0 {
+		t.Fatalf("the container built the gateway %d times, want 0", n)
+	}
 }
 
 func TestAttachRegistersGatewayWideByDefault(t *testing.T) {

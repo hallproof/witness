@@ -211,20 +211,51 @@ func init() {
 	})
 }
 
-// attach finds *nexus.Gateway in the host's container and registers the
-// collectors.
+// extensionName is the name nexus's Forge extension registers under.
+const extensionName = "nexus"
+
+// gatewayGetter is the one method of nexus's Forge extension the adapter
+// uses. A structural interface keeps the extension module out of the
+// adapter's dependencies.
+type gatewayGetter interface{ Gateway() *nx.Gateway }
+
+// attach registers the collectors. It reads the gateway through nexus's
+// extension when the app runs it, and from the container otherwise. Nexus
+// always has gateway-wide collectors, so there is no config that leaves
+// nothing to collect.
 func attach(_ context.Context, h adapter.Host) (bool, error) {
-	c, ok := h.Container.(vessel.Vessel)
-	if !ok || c == nil || !vessel.HasType[*nx.Gateway](c) {
+	ext, hasExt := h.Ext(extensionName)
+	c, isVessel := h.Container.(vessel.Vessel)
+	inContainer := isVessel && c != nil && vessel.HasType[*nx.Gateway](c)
+	if !hasExt && !inContainer {
 		return false, nil
 	}
 	var o Options
 	if err := adapter.Decode(h.Config, &o); err != nil {
 		return true, err
 	}
-	gw, err := vessel.Inject[*nx.Gateway](c)
-	if err != nil {
-		return true, fmt.Errorf("witness/nexus: resolve the gateway: %w", err)
+	log := h.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	var gw *nx.Gateway
+	if hasExt {
+		g, ok := ext.(gatewayGetter)
+		if !ok {
+			log.Warn("witness: the nexus extension has no Gateway getter, so nexus is skipped", "type", fmt.Sprintf("%T", ext))
+			return false, nil
+		}
+		if gw = g.Gateway(); gw == nil {
+			log.Warn("witness: the nexus extension has no gateway yet, so nexus is skipped")
+			return false, nil
+		}
+	} else {
+		// The app doesn't run nexus's extension and provided the gateway
+		// itself. A finished value is never started again.
+		var err error
+		if gw, err = vessel.Inject[*nx.Gateway](c); err != nil {
+			return true, fmt.Errorf("witness/nexus: resolve the gateway: %w", err)
+		}
 	}
 	// The host reports its own scope. Only this adapter's config is ours to
 	// report.
@@ -232,10 +263,6 @@ func attach(_ context.Context, h adapter.Host) (bool, error) {
 		h.Widened("all_tenants")
 	}
 	o.AllTenants = o.AllTenants || h.Scope.AllTenants
-	log := h.Logger
-	if log == nil {
-		log = slog.Default()
-	}
 	if on, ok := h.Config["event_proofs"].(bool); ok && on {
 		log.Warn("witness: nexus has no event proofs yet, because its audit actions (key.created and the like) aren't namespaced; event_proofs is ignored")
 	}
