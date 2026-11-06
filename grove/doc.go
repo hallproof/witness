@@ -9,8 +9,8 @@
 // migration, such as "core" or "authsome"), the version, the migration's
 // name, the time it was applied (RFC 3339, UTC, to the second) and seq, the
 // row number in grove's migration table, which shows the order they ran
-// in. It runs hourly, since it only changes when you deploy. No Hallproof
-// test uses it yet.
+// in. It runs hourly, since it only changes when you deploy. It is the
+// evidence for Hallproof's migrations-recorded test.
 //
 // grove.migration-status is a snapshot with one entry per database: its
 // driver ("pg", "sqlite", ...), how many migrations are applied, how many
