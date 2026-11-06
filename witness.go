@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -41,7 +42,8 @@ type Options struct {
 	// second timeout.
 	HTTPClient *http.Client
 	// HeartbeatEvery is how often each collector's heartbeat is sent. The
-	// default is 10 minutes.
+	// default is 10 minutes, and New refuses more than a day, the longest
+	// Hallproof takes.
 	HeartbeatEvery time.Duration
 	// Replica names this copy of the app in heartbeats. The default is the
 	// host name plus 8 random hex digits.
@@ -78,6 +80,9 @@ func New(o Options) (*Witness, error) {
 	}
 	if o.Replica == "" {
 		o.Replica = defaultReplica()
+	}
+	if o.HeartbeatEvery > collect.MaxHeartbeatEvery {
+		return nil, fmt.Errorf("witness: HeartbeatEvery is %v; Hallproof takes at most %v", o.HeartbeatEvery, collect.MaxHeartbeatEvery)
 	}
 	opts := []client.Option{client.WithUserAgent(sdk), client.WithLogger(o.Logger)}
 	if o.HTTPClient != nil {
@@ -139,6 +144,19 @@ func (w *Witness) Population(p collect.Population) error {
 // the chain is unconfigured.
 func (w *Witness) EventProof(e collect.EventProof) error {
 	return w.register(func() error { return w.sched.AddEventProof(e) })
+}
+
+// Remove takes the collector registered under key back out, so a caller
+// that registers several collectors can undo the ones it added when a later
+// one fails. It reports whether there was one to remove. After Start it
+// removes nothing and returns false.
+func (w *Witness) Remove(key string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.started {
+		return false
+	}
+	return w.sched.Remove(key)
 }
 
 // Chain returns the chain witness records to.

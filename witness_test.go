@@ -75,6 +75,14 @@ func TestNewPassesClientErrors(t *testing.T) {
 	}
 }
 
+func TestNewRefusesAHeartbeatSlowerThanADay(t *testing.T) {
+	_, err := witness.New(witness.Options{Endpoint: "https://hallproof.example.com", IngestKey: "hpk_x",
+		HeartbeatEvery: 25 * time.Hour})
+	if err == nil {
+		t.Fatal("a 25-hour heartbeat interval was accepted; Hallproof takes at most a day")
+	}
+}
+
 func TestEndToEnd(t *testing.T) {
 	s := ingesttest.New(t)
 	s.Know(push.KindHeartbeat)
@@ -259,6 +267,38 @@ func TestStartContextEndingDoesNotStopCollectors(t *testing.T) {
 	before := len(s.Stored())
 	eventually(t, "evidence after Start's context ended", func() bool { return len(s.Stored()) > before+1 })
 	if err := stopWithin(t, w, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRemove(t *testing.T) {
+	s := ingesttest.New(t)
+	w, err := witness.New(witness.Options{Endpoint: s.URL, IngestKey: s.Key, Logger: quiet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Snapshot(collect.Snapshot{Key: "a", Title: "t", Collect: settings}); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Population(collect.Population{Key: "b", Title: "t", Source: "b", Collect: staff}); err != nil {
+		t.Fatal(err)
+	}
+	if !w.Remove("a") {
+		t.Fatal("Remove(a) = false, want true")
+	}
+	if w.Remove("a") {
+		t.Fatal("a second Remove(a) = true, want false")
+	}
+	if err := w.Snapshot(collect.Snapshot{Key: "a", Title: "t", Collect: settings}); err != nil {
+		t.Fatalf("adding a removed key again: %v", err)
+	}
+	if err := w.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if w.Remove("b") {
+		t.Error("Remove after Start = true, want false")
+	}
+	if err := stopWithin(t, w, time.Second); err != nil {
 		t.Fatal(err)
 	}
 }

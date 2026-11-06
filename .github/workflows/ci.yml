@@ -16,8 +16,10 @@ permissions:
   security-events: write
 
 jobs:
-  # Test, lint, verify and security come from the shared workflow. Witness is
-  # one module today; the adapters in piece D become a matrix over modules.
+  # Test, lint, verify and security come from the shared workflow, once for
+  # the stdlib-only root on both supported Go versions, and once per nested
+  # module (scripts/modules.sh). The adapters need what their libraries need,
+  # Go 1.26.
   ci:
     uses: xraph/workflows/.github/workflows/go-ci.yml@v1
     with:
@@ -28,4 +30,48 @@ jobs:
       codecov-flag-name: witness
     secrets:
       # The upload is skipped when the org has no token.
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  # The release script's own test: the tag list and the go.mod check
+  # release-tags.sh runs before it tags.
+  release-script:
+    name: Release script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache: false
+      - run: scripts/release-tags_test.sh
+
+  modules:
+    name: List nested modules
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: list
+        run: |
+          echo "list=$(scripts/modules.sh | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  nested:
+    name: ${{ matrix.module }}
+    needs: modules
+    if: needs.modules.outputs.list != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.modules.outputs.list) }}
+    uses: xraph/workflows/.github/workflows/go-ci.yml@v1
+    with:
+      working-directory: ${{ matrix.module }}
+      go-versions: '["1.26"]'
+      primary-go-version: "1.26"
+      os: '["ubuntu-latest"]'
+      prefer-makefile: false
+      check-nested-modules: false
+      codecov-flag-name: ${{ matrix.module }}
+    secrets:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}

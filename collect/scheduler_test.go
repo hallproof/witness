@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"strings"
@@ -118,7 +119,8 @@ func TestAddValidates(t *testing.T) {
 		"blank title":       s.AddSnapshot(Snapshot{Key: "b", Title: " ", Collect: ok}),
 		"nil Collect":       s.AddSnapshot(Snapshot{Key: "c", Title: "t"}),
 		"nil pop Collect":   s.AddPopulation(Population{Key: "d", Title: "t"}),
-		"empty stream":      s.AddEventProof(EventProof{Key: "e", Title: "t"}),
+		"empty stream":      s.AddEventProof(EventProof{Key: "e", Title: "t", Actions: []string{"a"}}),
+		"no actions":        s.AddEventProof(EventProof{Key: "n", Title: "t", Stream: "platform"}),
 		"negative interval": s.AddSnapshot(Snapshot{Key: "f", Title: "t", Every: -time.Second, Collect: ok}),
 	}
 	for name, err := range bad {
@@ -330,7 +332,9 @@ func TestEventProofAdvances(t *testing.T) {
 	if err := s.AddEventProof(EventProof{Key: "logins", Title: "Logins", Stream: "platform", Actions: []string{"login"}}); err != nil {
 		t.Fatal(err)
 	}
-	for range 4 {
+	// The first run proves c1 and c2 and stops at ErrNothingNew; the second
+	// finds no chain and skips.
+	for range 2 {
 		s.runOnce(t.Context(), "logins")
 	}
 	if n := len(f.sent(push.KindEventProof)); n != 1 {
@@ -417,7 +421,7 @@ func TestProofCheckpointMovesOnlyOnSuccess(t *testing.T) {
 	fc := &fakeChain{}
 	var calls int
 	var mu sync.Mutex
-	fc.prove = func(chain.ProofRequest) (*push.EventProof, error) {
+	fc.prove = func(r chain.ProofRequest) (*push.EventProof, error) {
 		mu.Lock()
 		calls++
 		first := calls == 1
@@ -425,10 +429,13 @@ func TestProofCheckpointMovesOnlyOnSuccess(t *testing.T) {
 		if first {
 			time.Sleep(80 * time.Millisecond) // ignores its context
 		}
+		if r.From != "" {
+			return nil, chain.ErrNothingNew
+		}
 		return &push.EventProof{Cited: []uint64{1}, Checkpoint: push.Checkpoint{ID: "c1"}}, nil
 	}
 	s, f, _ := newTestScheduler(fc)
-	if err := s.AddEventProof(EventProof{Key: "p", Title: "t", Every: 20 * time.Millisecond, Stream: "s"}); err != nil {
+	if err := s.AddEventProof(EventProof{Key: "p", Title: "t", Every: 20 * time.Millisecond, Stream: "s", Actions: []string{"a"}}); err != nil {
 		t.Fatal(err)
 	}
 	s.runOnce(t.Context(), "p") // times out
@@ -439,7 +446,168 @@ func TestProofCheckpointMovesOnlyOnSuccess(t *testing.T) {
 	s.runOnce(t.Context(), "p")
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
-	if len(fc.reqs) != 2 || fc.reqs[1].From != "" {
-		t.Fatalf("requests %+v, want the second to start from the beginning again", fc.reqs)
+	// The timed-out run's goroutine asks again from c1 after it wakes; the
+	// second run starts from the beginning.
+	if len(fc.reqs) != 4 || fc.reqs[2].From != "" {
+		t.Fatalf("requests %+v, want the second run to start from the beginning again", fc.reqs)
+	}
+}
+
+// Hallproof takes every_seconds of 1 to 86400. A sub-second interval, as in
+// tests, still says 1.
+func TestHeartbeatEverySecondsIsAtLeastOne(t *testing.T) {
+	f := &fakeSender{}
+	s := NewScheduler(f, chain.Unconfigured{}, SchedulerOptions{HeartbeatEvery: 20 * time.Millisecond})
+	if err := s.AddSnapshot(Snapshot{Key: "fast", Title: "t", Every: 20 * time.Millisecond, Collect: func(context.Context) (map[string]any, error) {
+		return map[string]any{"ok": true}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	eventually(t, "a heartbeat", 2*time.Second, func() bool { return len(f.sent(push.KindHeartbeat)) > 0 })
+	cancel()
+	<-done
+	hb, err := push.DecodeBody[push.Heartbeat](f.sent(push.KindHeartbeat)[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hb.EverySeconds != 1 {
+		t.Fatalf("every_seconds = %d for a 20ms interval, want 1", hb.EverySeconds)
+	}
+}
+
+func TestEverySeconds(t *testing.T) {
+	for _, tc := range []struct {
+		d    time.Duration
+		want int
+	}{
+		{20 * time.Millisecond, 1},
+		{time.Second, 1},
+		{1500 * time.Millisecond, 2},
+		{10 * time.Minute, 600},
+		{24 * time.Hour, 86400},
+		{48 * time.Hour, 86400},
+	} {
+		if got := everySeconds(tc.d); got != tc.want {
+			t.Errorf("everySeconds(%v) = %d, want %d", tc.d, got, tc.want)
+		}
+	}
+}
+
+// A chain can seal several checkpoints between two runs. One run proves
+// them all, pushing a message for each proof that cites something.
+func TestEventProofCatchesUpSeveralCheckpoints(t *testing.T) {
+	fc := &fakeChain{}
+	fc.prove = func(r chain.ProofRequest) (*push.EventProof, error) {
+		switch r.From {
+		case "":
+			return &push.EventProof{Cited: []uint64{2}, Checkpoint: push.Checkpoint{ID: "c1", ToHash: "h1"}}, nil
+		case "c1":
+			return &push.EventProof{Checkpoint: push.Checkpoint{ID: "c2", ToHash: "h2"}}, nil
+		case "c2":
+			return &push.EventProof{Cited: []uint64{9}, Checkpoint: push.Checkpoint{ID: "c3", ToHash: "h3"}}, nil
+		}
+		return nil, chain.ErrNothingNew
+	}
+	s, f, _ := newTestScheduler(fc)
+	if err := s.AddEventProof(EventProof{Key: "logins", Title: "Logins", Stream: "platform", Actions: []string{"login"}}); err != nil {
+		t.Fatal(err)
+	}
+	s.runOnce(t.Context(), "logins")
+	if n := len(f.sent(push.KindEventProof)); n != 2 {
+		t.Fatalf("%d proofs pushed, want 2 (c1 and c3; c2 cited nothing)", n)
+	}
+	s.mu.Lock()
+	c := s.collectors["logins"]
+	from, hash := c.from, c.lastHash
+	s.mu.Unlock()
+	if from != "c3" || hash != "h3" {
+		t.Fatalf("from %q hash %q, want c3 and h3", from, hash)
+	}
+}
+
+func TestEventProofStopsAfterTwentyProofs(t *testing.T) {
+	fc := &fakeChain{}
+	var n int
+	fc.prove = func(chain.ProofRequest) (*push.EventProof, error) {
+		n++
+		return &push.EventProof{Checkpoint: push.Checkpoint{ID: fmt.Sprint("c", n)}}, nil
+	}
+	s, _, _ := newTestScheduler(fc)
+	if err := s.AddEventProof(EventProof{Key: "p", Title: "t", Stream: "platform", Actions: []string{"a"}}); err != nil {
+		t.Fatal(err)
+	}
+	s.runOnce(t.Context(), "p")
+	if n != maxProofsPerRun {
+		t.Fatalf("%d proofs in one run, want %d", n, maxProofsPerRun)
+	}
+}
+
+func TestEventProofKeepsProgressBeforeAnError(t *testing.T) {
+	fc := &fakeChain{}
+	fc.prove = func(r chain.ProofRequest) (*push.EventProof, error) {
+		if r.From == "" {
+			return &push.EventProof{Cited: []uint64{1}, Checkpoint: push.Checkpoint{ID: "c1", ToHash: "h1"}}, nil
+		}
+		return nil, errors.New("the store went away")
+	}
+	s, f, _ := newTestScheduler(fc)
+	if err := s.AddEventProof(EventProof{Key: "p", Title: "t", Stream: "platform", Actions: []string{"a"}}); err != nil {
+		t.Fatal(err)
+	}
+	s.runOnce(t.Context(), "p")
+	if n := len(f.sent(push.KindEventProof)); n != 1 {
+		t.Fatalf("%d proofs pushed, want the one proven before the error", n)
+	}
+	s.mu.Lock()
+	from := s.collectors["p"].from
+	s.mu.Unlock()
+	if from != "c1" {
+		t.Fatalf("from %q, want c1", from)
+	}
+}
+
+func TestRemove(t *testing.T) {
+	s, _, _ := newTestScheduler(nil)
+	ok := func(context.Context) (map[string]any, error) { return map[string]any{"v": 1}, nil }
+	for _, k := range []string{"a", "b"} {
+		if err := s.AddSnapshot(Snapshot{Key: k, Title: "t", Every: time.Hour, Collect: ok}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !s.Remove("a") {
+		t.Fatal("Remove(a) = false, want true")
+	}
+	if s.Remove("a") {
+		t.Fatal("a second Remove(a) = true, want false")
+	}
+	if s.Remove("never-added") {
+		t.Fatal("Remove of a key never added = true")
+	}
+
+	// Run must not trip over the removed key.
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	eventually(t, "Run to start", time.Second, func() bool { return s.isRunning() })
+	if s.Remove("b") {
+		t.Error("Remove after Run = true, want false")
+	}
+	cancel()
+	<-done
+
+	// A removed key can be added again.
+	s2, _, _ := newTestScheduler(nil)
+	if err := s2.AddSnapshot(Snapshot{Key: "a", Title: "t", Collect: ok}); err != nil {
+		t.Fatal(err)
+	}
+	s2.Remove("a")
+	if err := s2.AddSnapshot(Snapshot{Key: "a", Title: "t", Collect: ok}); err != nil {
+		t.Fatalf("adding a removed key again: %v", err)
+	}
+	if len(s2.order) != 1 {
+		t.Fatalf("order = %v, want just a", s2.order)
 	}
 }

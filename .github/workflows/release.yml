@@ -30,28 +30,51 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
-            echo "Creating tag $TAG"
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag "$TAG"
-            git push origin "$TAG"
           else
             TAG="${{ github.ref_name }}"
           fi
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
+      # Go comes first: release-tags.sh reads every go.mod with go mod edit.
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
-          # The module has no dependencies and so no go.sum to key a cache on.
-          cache: false
+          # The root asks for Go 1.25, but the nested modules need what
+          # their libraries need, Go 1.26, and the verify step builds them
+          # all.
+          go-version: "1.26"
+          # The root has no go.sum; the nested modules' go.sum files key
+          # the cache.
+          cache: true
+          cache-dependency-path: '**/go.sum'
 
-      - name: Verify build
+      # The root and every nested module (scripts/modules.sh) but the
+      # test-only e2e release together, at one version, on one commit.
+      # scripts/release-tags.sh refuses unless every go.mod requires this
+      # repo's modules at that version, then pushes whichever of those tags
+      # are missing in one atomic push.
+      #
+      # When someone pushed the root tag, it's already public, so the nested
+      # tags go out straight away: a root nobody can get the adapters for is
+      # worse than a set that fails verify. A dispatched release verifies
+      # first and only then pushes every tag.
+      - name: Tag nested modules (root tag pushed)
+        if: github.event_name == 'push'
+        run: scripts/release-tags.sh "${{ steps.set-tag.outputs.tag }}"
+
+      - name: Verify every module
         run: |
-          go mod download
-          go build ./...
-          go test -race -count=1 ./...
+          set -e
+          for dir in . $(scripts/modules.sh); do
+            echo "==> $dir"
+            (cd "$dir" && go mod download && go build ./... && go test -race -count=1 ./...)
+          done
+
+      - name: Tag the root and nested modules (dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        run: scripts/release-tags.sh "${{ steps.set-tag.outputs.tag }}"
 
       - name: Generate release notes
         id: notes
@@ -83,5 +106,12 @@ jobs:
 
             ```bash
             go get github.com/hallproof/witness@${{ steps.set-tag.outputs.tag }}
+            ```
+
+            The Forge extension, the Chronicle chain and each library's adapter are modules of their own. Get the ones you use at the same version, for example:
+
+            ```bash
+            go get github.com/hallproof/witness/forge@${{ steps.set-tag.outputs.tag }}
+            go get github.com/hallproof/witness/keysmith@${{ steps.set-tag.outputs.tag }}
             ```
           generate_release_notes: true
