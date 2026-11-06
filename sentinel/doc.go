@@ -3,12 +3,11 @@
 // suites, their latest scores against the current baseline, red-team
 // results, and the thresholds runs are judged by.
 //
-// None of these collectors names a Hallproof test yet. Hallproof has no
-// test key for AI evaluation evidence, and the closest one,
-// vulnerability-scanning, is about scanning systems, so stretching it to
-// model red-teaming would mislead your auditor. The evidence still lands in
-// Hallproof, and the collectors will name tests once Hallproof has keys
-// such as ai-evals-current, ai-no-regression and ai-redteam-recent.
+// The evidence lands on Hallproof's AI testing checks. sentinel.suites and
+// the eval-activity proof support ai-evals-current, sentinel.latest-scores
+// supports ai-evals-current and ai-no-regression, and sentinel.redteam
+// supports ai-redteam-recent. The settings snapshot supports no test of its
+// own.
 //
 // # Collectors
 //

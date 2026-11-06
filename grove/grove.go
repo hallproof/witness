@@ -127,6 +127,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, error)
 		Title:       "Applied database migrations",
 		Description: "Every schema migration recorded as applied in each database, with its version, owning module and time applied.",
 		Source:      "applied-migrations",
+		Tests:       []string{"migrations-recorded"},
 		Every:       time.Hour,
 		Collect:     a.collectMigrations,
 	}}

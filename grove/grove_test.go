@@ -803,3 +803,17 @@ func TestAttachFailingPartWayRegistersNothing(t *testing.T) {
 		t.Error("attach removed a collector it didn't add")
 	}
 }
+
+// The migrations population is evidence for Hallproof's migrations-recorded
+// test; the status snapshot supports no test of its own.
+func TestTestKeys(t *testing.T) {
+	db := openSQLite(t, "keys.db")
+	standard(t, db)
+	c := collectorsOf(t, New(db))
+	if got := c.pops[KeyMigrations].Tests; !reflect.DeepEqual(got, []string{"migrations-recorded"}) {
+		t.Errorf("%s Tests = %v, want [migrations-recorded]", KeyMigrations, got)
+	}
+	if got := c.snaps[KeyStatus].Tests; len(got) != 0 {
+		t.Errorf("%s Tests = %v, want none", KeyStatus, got)
+	}
+}

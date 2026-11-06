@@ -137,9 +137,8 @@ func (a *Adapter) Register(w *witness.Witness) error {
 	return set.Register(w)
 }
 
-// collectors builds every collector. None has Tests yet: Hallproof has no
-// test key for AI evaluation evidence, and the nearest one,
-// vulnerability-scanning, would mislead an auditor.
+// collectors builds every collector. Their evidence supports Hallproof's AI
+// testing checks: ai-evals-current, ai-no-regression and ai-redteam-recent.
 func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []collect.EventProof, error) {
 	if a.eng == nil {
 		return nil, nil, nil, errors.New("witness/sentinel: no engine")
@@ -155,6 +154,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 			Title:       "AI evaluation suites",
 			Description: "Each evaluation suite, the model it tests, how many cases and red-team cases it has, and whether it has a baseline.",
 			Source:      "sentinel-suites",
+			Tests:       []string{"ai-evals-current"},
 			Every:       time.Hour,
 			Collect:     a.collectSuites,
 		},
@@ -163,6 +163,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 			Title:       "Latest AI evaluation scores",
 			Description: "Each suite's most recent completed run, its scores, and how they compare with the suite's baseline." + runs,
 			Source:      "sentinel-latest-runs",
+			Tests:       []string{"ai-evals-current", "ai-no-regression"},
 			Every:       time.Hour,
 			Collect:     a.collectLatestScores,
 		},
@@ -171,6 +172,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 			Title:       "AI red-team results",
 			Description: "For each suite with red-team cases, the latest run's attack count and how many attacks got through, by attack type." + runs,
 			Source:      "sentinel-redteam",
+			Tests:       []string{"ai-redteam-recent"},
 			Every:       6 * time.Hour,
 			Collect:     a.collectRedTeam,
 		},
@@ -193,6 +195,7 @@ func (a *Adapter) collectors() ([]collect.Population, []collect.Snapshot, []coll
 			Title:       "AI evaluation activity",
 			Description: "Signed audit events for evaluation runs completing or failing, regressions being found and baselines being saved.",
 			Every:       time.Hour,
+			Tests:       []string{"ai-evals-current"},
 			Stream:      adapter.Platform,
 			Actions:     slices.Clone(actions),
 		})

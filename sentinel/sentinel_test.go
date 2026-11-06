@@ -397,24 +397,32 @@ func TestAttachBadConfig(t *testing.T) {
 	}
 }
 
-func TestNoTestKeys(t *testing.T) {
+// Each collector names the Hallproof tests its evidence supports.
+func TestTestKeys(t *testing.T) {
 	c := collectorsOf(t, New(newFixture(t).eng, WithEventProofs()))
 	if len(c.pops) != 3 || len(c.snaps) != 1 || len(c.proofs) != 1 {
 		t.Fatalf("collectors = %d pops, %d snaps, %d proofs", len(c.pops), len(c.snaps), len(c.proofs))
 	}
+	want := map[string][]string{
+		KeySuites:       {"ai-evals-current"},
+		KeyLatestScores: {"ai-evals-current", "ai-no-regression"},
+		KeyRedTeam:      {"ai-redteam-recent"},
+		KeySettings:     nil,
+		KeyEvalActivity: {"ai-evals-current"},
+	}
+	got := map[string][]string{}
 	for k, p := range c.pops {
-		if len(p.Tests) != 0 {
-			t.Errorf("%s Tests = %v, want none", k, p.Tests)
-		}
+		got[k] = p.Tests
 	}
 	for k, s := range c.snaps {
-		if len(s.Tests) != 0 {
-			t.Errorf("%s Tests = %v, want none", k, s.Tests)
-		}
+		got[k] = s.Tests
 	}
 	for k, e := range c.proofs {
-		if len(e.Tests) != 0 {
-			t.Errorf("%s Tests = %v, want none", k, e.Tests)
+		got[k] = e.Tests
+	}
+	for k, w := range want {
+		if !slices.Equal(got[k], w) {
+			t.Errorf("%s Tests = %v, want %v", k, got[k], w)
 		}
 	}
 }
